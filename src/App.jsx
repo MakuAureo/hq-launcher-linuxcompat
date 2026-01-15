@@ -669,7 +669,7 @@ export default function App() {
                                       v.data?.range ? (
                                         <div className="flex items-center gap-3">
                                           <div className="w-20 shrink-0 text-xs text-white/50">
-                                            {v.data.range.start}–{v.data.range.end}
+                                            {v.data.range.start}-{v.data.range.end}
                                           </div>
                                           <Slider
                                             value={[v.data.value ?? 0]}
@@ -709,7 +709,7 @@ export default function App() {
                                       v.data?.range ? (
                                         <div className="flex items-center gap-3">
                                           <div className="w-24 shrink-0 text-xs text-white/50">
-                                            {v.data.range.start}–{v.data.range.end}
+                                            {v.data.range.start}-{v.data.range.end}
                                           </div>
                                           <Slider
                                             value={[v.data.value ?? 0]}
@@ -726,9 +726,24 @@ export default function App() {
                                               })
                                             }
                                           />
-                                          <div className="w-20 shrink-0 text-right text-sm text-white/80 tabular-nums">
-                                            {Number(v.data.value ?? 0).toFixed(3)}
-                                          </div>
+                                            {/* <div className="w-20 shrink-0 text-right text-sm text-white/80 tabular-nums">
+                                              {Number(v.data.value ?? 0).toFixed(3)}
+                                            </div> */}
+
+                                          <input
+                                            className="w-13 shrink-0 text-sm text-white/80 tabular-nums"
+                                            type="text"
+                                            value={v.data?.value ?? 0}
+                                            onChange={(ev) =>
+                                              setCfgEntry(s.name, e.name, {
+                                                type: "Float",
+                                                data: {
+                                                  value: Number(ev.target.value),
+                                                  range: v.data?.range ?? null,
+                                                },
+                                              })
+                                            }
+                                          />
                                         </div>
                                       ) : (
                                         <Input

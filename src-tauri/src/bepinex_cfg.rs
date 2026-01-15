@@ -119,7 +119,13 @@ fn parse_orphaned_entry_line(line: &str) -> Option<(&str, &str)> {
 fn check_value_type(value: &str) -> String {
     let first_char = value.chars().next().unwrap_or_default();
     match first_char {
-        '0'..='9' => "Int32".to_string(),
+        '0'..='9' => {
+            if value.contains('.') {
+                "Single".to_string()
+            } else {
+                "Int32".to_string()
+            }
+        }
         't' | 'f' => "Boolean".to_string(),
         _ => "String".to_string(),
     }
