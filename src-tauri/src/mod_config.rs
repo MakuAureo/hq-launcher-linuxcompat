@@ -44,6 +44,21 @@ fn deserialize_version_config<'de, D>(deserializer: D) -> Result<BTreeMap<u32, S
         .collect()
 }
 
+fn deserialize_u32_string_map<'de, D>(deserializer: D) -> Result<BTreeMap<u32, String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let string_map: BTreeMap<String, String> = BTreeMap::deserialize(deserializer)?;
+    string_map
+        .into_iter()
+        .map(|(k, v)| {
+            k.parse::<u32>()
+                .map(|key| (key, v))
+                .map_err(serde::de::Error::custom)
+        })
+        .collect()
+}
+
 
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -62,14 +77,18 @@ fn default_true() -> bool {
 #[derive(Debug, Clone, Deserialize)]
 pub struct RemoteManifest {
     pub version: u32,
+    #[serde(default, deserialize_with="deserialize_u32_string_map")]
+    pub manifests: BTreeMap<u32, String>,
     pub chain_config: Vec<Vec<String>>,
     pub mods: Vec<ModEntry>,
 }
 
 impl ModsConfig {
     /// you can check json in https://f.asta.rs/hq-launcher/manifest.json
-    /// output: (version, cfg, chain_config)
-    pub async fn fetch_manifest(client: &reqwest::Client) -> Result<(u32, Self, Vec<Vec<String>>), String> {
+    /// output: (manifest_version, cfg, chain_config, manifests)
+    pub async fn fetch_manifest(
+        client: &reqwest::Client,
+    ) -> Result<(u32, Self, Vec<Vec<String>>, BTreeMap<u32, String>), String> {
         let url = "https://f.asta.rs/hq-launcher/manifest.json";
         log::info!("Fetching manifest from {url}");
 
@@ -84,9 +103,10 @@ impl ModsConfig {
             .await
             .map_err(|e| e.to_string())?;
 
+        let manifests = manifest.manifests.clone();
         let mut cfg = ModsConfig { mods: manifest.mods };
         let _ = normalize_aliases(&mut cfg);
-        Ok((manifest.version, cfg, manifest.chain_config))
+        Ok((manifest.version, cfg, manifest.chain_config, manifests))
     }
 }
 
@@ -126,7 +146,14 @@ impl ModEntry {
         self.version_config
             .range(..=game_version)
             .next_back()
-            .map(|(_, v)| v.as_str())
+            .and_then(|(_, v)| {
+                // Treat "0.0.0" as "no pin" => use latest version.
+                if v.trim() == "0.0.0" {
+                    None
+                } else {
+                    Some(v.as_str())
+                }
+            })
     }
 }
 

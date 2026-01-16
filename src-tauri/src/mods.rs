@@ -1,3 +1,4 @@
+use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
@@ -5,6 +6,47 @@ use crate::bepinex_cfg::read_manifest;
 use crate::mod_config::{ModEntry, ModsConfig};
 use crate::thunderstore::{self, PackageListing};
 use crate::zip_utils::extract_thunderstore_into_plugins_with_progress;
+use semver::Version;
+
+fn parse_semver_loose(s: &str) -> Option<Version> {
+    let s = s.trim().trim_start_matches('v');
+    if let Ok(v) = Version::parse(s) {
+        return Some(v);
+    }
+    // Allow "1.2" or "1" by padding.
+    let parts: Vec<&str> = s.split('.').collect();
+    let padded = match parts.len() {
+        1 => format!("{}.0.0", s),
+        2 => format!("{}.0", s),
+        _ => s.to_string(),
+    };
+    Version::parse(&padded).ok()
+}
+
+fn cmp_version_str(a: &str, b: &str) -> Ordering {
+    match (parse_semver_loose(a), parse_semver_loose(b)) {
+        (Some(va), Some(vb)) => va.cmp(&vb),
+        // Prefer parsable semver over non-parsable.
+        (Some(_), None) => Ordering::Greater,
+        (None, Some(_)) => Ordering::Less,
+        (None, None) => a.cmp(b),
+    }
+}
+
+fn latest_pkg_version<'a>(versions: &'a [thunderstore::PackageVersion]) -> Option<&'a thunderstore::PackageVersion> {
+    versions
+        .iter()
+        .max_by(|a, b| cmp_version_str(&a.version_number, &b.version_number))
+}
+
+fn thunderstore_download_url(dev: &str, name: &str, version: &str) -> String {
+    // Direct download endpoint (zip):
+    // https://thunderstore.io/package/download/{dev}/{modname}/{version}/
+    format!(
+        "https://thunderstore.io/package/download/{}/{}/{}/",
+        dev, name, version
+    )
+}
 
 
 pub fn plugins_dir(game_root: &Path) -> PathBuf {
@@ -116,24 +158,22 @@ where
 
         let pinned = spec.pinned_version_for(game_version);
         let ver = if let Some(pin) = pinned {
-            pin.to_string()
+            // Prefer the pinned version only if it exists in the listing.
+            if pkg.versions.iter().any(|v| v.version_number == pin) {
+                pin.to_string()
+            } else {
+                log::warn!("Pinned version not found for {mod_label}: {pin} (falling back to latest)");
+                latest_pkg_version(&pkg.versions)
+                    .map(|v| v.version_number.clone())
+                    .unwrap_or_else(|| "0.0.0".to_string())
+            }
         } else {
-            pkg.versions
-                .first()
+            latest_pkg_version(&pkg.versions)
                 .map(|v| v.version_number.clone())
                 .unwrap_or_else(|| "0.0.0".to_string())
         };
 
-        let dl = if let Some(pin) = pinned {
-            pkg.versions
-                .iter()
-                .find(|v| v.version_number == pin)
-                .map(|v| v.download_url.clone())
-        } else {
-            pkg.versions.first().map(|v| v.download_url.clone())
-        };
-
-        let Some(download_url) = dl else {
+        if ver == "0.0.0" {
             installed = installed.saturating_add(1);
             log::error!("No versions for {}-{}", spec.dev, spec.name);
             on_progress(
@@ -142,7 +182,9 @@ where
                 Some(format!("Failed to resolve {mod_label} (no versions)")),
             );
             continue;
-        };
+        }
+
+        let download_url = thunderstore_download_url(&spec.dev, &spec.name, &ver);
         log::info!("Resolved {mod_label} => v{ver}");
 
         let zip_path = temp_root.join(format!("{}-{}-{}.zip", spec.dev, spec.name, ver));
@@ -265,25 +307,46 @@ where
             let path = target_plugins.join(format!("{}-{}/manifest.json", spec.dev, spec.name));
             let manifest = read_manifest(&path)?;
 
-
-            let version_limit = spec.version_config.get(&game_version).unwrap_or(&"0.0.0".to_string()).clone();
-
-            if version_limit == "0.0.0" {
-                let new_version = packages.clone().iter().find(|p| p.owner.to_lowercase() == spec.dev.to_lowercase() && p.name.to_lowercase() == spec.name.to_lowercase()).map(|p| p.versions.first().map(|v| v.version_number.clone()).unwrap_or_else(|| "0.0.0".to_string())).unwrap_or_else(|| "0.0.0".to_string());
-                
-                if manifest.version_number == new_version {
-                    on_progress(idx, total_mods, Some(format!("{} is already the latest version", mod_label.clone())), None);
-                    continue;
-                }
-                log::info!("{} mod can update", mod_label.clone());
-
-                on_progress(idx, total_mods, Some(format!("{} mod can update", mod_label.clone())), Some(mod_label.clone()));
-            } else if manifest.version_number != version_limit {
-                log::info!("{} mod can update", mod_label.clone());
-                on_progress(idx, total_mods, Some(format!("{} mod can update", mod_label.clone())), Some(format!("{} mod can update", mod_label.clone())));
+            // Use the SAME pinning semantics as install/update:
+            // - If pinned_version_for(game_version) exists: compare against that pinned version.
+            // - Else: compare against latest available version (semver max).
+            let desired_version = if let Some(pin) = spec.pinned_version_for(game_version) {
+                pin.to_string()
             } else {
+                let key = (spec.dev.to_lowercase(), spec.name.to_lowercase());
+                package_map
+                    .get(&key)
+                    .and_then(|p| latest_pkg_version(&p.versions).map(|v| v.version_number.clone()))
+                    .unwrap_or_else(|| "0.0.0".to_string())
+            };
+
+            if desired_version == "0.0.0" {
+                log::warn!("Could not resolve desired version for {mod_label} (no versions)");
+                on_progress(
+                    idx,
+                    total_mods,
+                    Some(format!("{mod_label}: failed to resolve latest version")),
+                    None,
+                );
+                continue;
+            }
+
+            if manifest.version_number == desired_version {
                 log::info!("{} is already the latest version", mod_label.clone());
-                on_progress(idx, total_mods, Some(format!("{} is already the latest version", mod_label.clone())), None);
+                on_progress(
+                    idx,
+                    total_mods,
+                    Some(format!("{} is already the latest version", mod_label.clone())),
+                    None,
+                );
+            } else {
+                log::info!("{} mod can update ({} -> {})", mod_label.clone(), manifest.version_number, desired_version);
+                on_progress(
+                    idx,
+                    total_mods,
+                    Some(format!("{} mod can update", mod_label.clone())),
+                    Some(mod_label.clone()),
+                );
             }
             continue;
         }
@@ -363,24 +426,21 @@ where
 
         let pinned = spec.pinned_version_for(game_version);
         let ver = if let Some(pin) = pinned {
-            pin.to_string()
+            if pkg.versions.iter().any(|v| v.version_number == pin) {
+                pin.to_string()
+            } else {
+                log::warn!("Pinned version not found for {mod_label}: {pin} (falling back to latest)");
+                latest_pkg_version(&pkg.versions)
+                    .map(|v| v.version_number.clone())
+                    .unwrap_or_else(|| "0.0.0".to_string())
+            }
         } else {
-            pkg.versions
-                .first()
+            latest_pkg_version(&pkg.versions)
                 .map(|v| v.version_number.clone())
                 .unwrap_or_else(|| "0.0.0".to_string())
         };
 
-        let dl = if let Some(pin) = pinned {
-            pkg.versions
-                .iter()
-                .find(|v| v.version_number == pin)
-                .map(|v| v.download_url.clone())
-        } else {
-            pkg.versions.first().map(|v| v.download_url.clone())
-        };
-
-        let Some(download_url) = dl else {
+        if ver == "0.0.0" {
             installed = installed.saturating_add(1);
             log::error!("No versions for {}-{}", spec.dev, spec.name);
             on_progress(
@@ -389,7 +449,9 @@ where
                 Some(format!("Failed to resolve {mod_label} (no versions)")),
             );
             continue;
-        };
+        }
+
+        let download_url = thunderstore_download_url(&spec.dev, &spec.name, &ver);
         log::info!("Resolved {mod_label} => v{ver}");
 
         let zip_path = temp_root.join(format!("{}-{}-{}.zip", spec.dev, spec.name, ver));
@@ -417,6 +479,16 @@ where
         // Extract directly into BepInEx/plugins, then delete the zip.
         on_progress(installed, total_mods, Some(format!("Extracting {mod_label}")));
         let folder_name = format!("{}-{}", spec.dev, spec.name);
+        let existing = target_plugins.join(&folder_name);
+        if existing.exists() {
+            if let Err(e) = std::fs::remove_dir_all(&existing) {
+                log::warn!(
+                    "Failed to remove existing mod folder {}: {}",
+                    existing.to_string_lossy(),
+                    e
+                );
+            }
+        }
 
         if let Err(e) = extract_thunderstore_into_plugins_with_progress(
             &zip_path,

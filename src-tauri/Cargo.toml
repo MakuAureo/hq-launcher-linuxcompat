@@ -30,4 +30,6 @@ zip = "2"
 reqwest = { version = "0.13.1", default-features = false, features = ["native-tls", "stream", "json", "http2"] }
 log = "0.4.29"
 log4rs = "1.4.0"
-
+tokio = { version = "1", features = ["process", "io-util", "rt", "macros"] }
+expectrl = "0.7"
+semver = "1"

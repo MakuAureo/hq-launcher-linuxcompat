@@ -6,18 +6,31 @@ mod mod_config;
 mod progress;
 mod thunderstore;
 mod zip_utils;
+mod downloader;
 
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::sync::Mutex;
 use tauri::{Manager, State};
 
 use crate::{mod_config::ModsConfig, progress::{TaskFinishedPayload, TaskUpdatableProgressPayload}};
+use crate::progress::{TaskErrorPayload, TaskProgressPayload};
+
+fn overall_from_step(step: u32, step_progress: f64, steps_total: u32) -> f64 {
+    if steps_total == 0 {
+        return 0.0;
+    }
+    let step0 = step.saturating_sub(1) as f64;
+    let steps = steps_total as f64;
+    (((step0 + step_progress.clamp(0.0, 1.0)) / steps) * 100.0).clamp(0.0, 100.0)
+}
 
 #[derive(Debug, Clone, Serialize)]
 struct ManifestDto {
     version: u32,
     chain_config: Vec<Vec<String>>,
     mods: Vec<mod_config::ModEntry>,
+    manifests: BTreeMap<u32, String>,
 }
 
 fn shared_config_dir(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
@@ -226,6 +239,12 @@ async fn download(app: tauri::AppHandle, version: u32) -> Result<bool, String> {
 }
 
 #[tauri::command]
+async fn sync_latest_install_from_manifest(app: tauri::AppHandle) -> Result<bool, String> {
+    installer::sync_latest_install_from_manifest(app).await?;
+    Ok(true)
+}
+
+#[tauri::command]
 async fn check_mod_updates(app: tauri::AppHandle, version: u32) -> Result<bool, String> {
     let client = reqwest::Client::new();
 
@@ -235,7 +254,7 @@ async fn check_mod_updates(app: tauri::AppHandle, version: u32) -> Result<bool, 
             .map_err(|e| format!("failed to resolve app data dir: {e}"))?
             .join("versions");
     let extract_dir = dir.join(format!("v{version}"));
-    let (_, mods_cfg, _) = ModsConfig::fetch_manifest(&client).await?;
+    let (_, mods_cfg, _, _) = ModsConfig::fetch_manifest(&client).await?;
 
     let mut updatable_mods: Vec<String> = vec![];
 
@@ -246,7 +265,9 @@ async fn check_mod_updates(app: tauri::AppHandle, version: u32) -> Result<bool, 
         &mods_cfg,
         |checked, total, detail, mod_name| {
             if let Some(mod_name) = mod_name {
-                updatable_mods.push(mod_name.clone());
+                if !updatable_mods.contains(&mod_name) {
+                    updatable_mods.push(mod_name.clone());
+                }
             }
             
             progress::emit_updatable_progress(
@@ -262,6 +283,142 @@ async fn check_mod_updates(app: tauri::AppHandle, version: u32) -> Result<bool, 
         TaskFinishedPayload { version, path: extract_dir.to_string_lossy().to_string() }
     );
     Ok(true)
+}
+
+#[tauri::command]
+async fn apply_mod_updates(app: tauri::AppHandle, version: u32) -> Result<bool, String> {
+    let res: Result<(), String> = async {
+        let client = reqwest::Client::new();
+
+        let dir = app
+            .path()
+            .app_data_dir()
+            .map_err(|e| format!("failed to resolve app data dir: {e}"))?
+            .join("versions");
+        let game_root = dir.join(format!("v{version}"));
+        if !game_root.exists() {
+            return Err(format!("version folder not found: {}", game_root.to_string_lossy()));
+        }
+
+        let (_, mods_cfg, _, _) = ModsConfig::fetch_manifest(&client).await?;
+
+        const STEPS_TOTAL: u32 = 2;
+        progress::emit_progress(
+            &app,
+            TaskProgressPayload {
+                version,
+                steps_total: STEPS_TOTAL,
+                step: 1,
+                step_name: "Check Updates".to_string(),
+                step_progress: 0.0,
+                overall_percent: overall_from_step(1, 0.0, STEPS_TOTAL),
+                detail: Some("Checking updatable mods...".to_string()),
+                downloaded_bytes: None,
+                total_bytes: None,
+                extracted_files: None,
+                total_files: None,
+            },
+        );
+
+        let mut updatable: Vec<String> = vec![];
+        mods::updatable_mods_with_progress(&game_root, version, &mods_cfg, |checked, total, detail, mod_name| {
+            if let Some(m) = mod_name {
+                if !updatable.contains(&m) {
+                    updatable.push(m);
+                }
+            }
+            let step_progress = if total == 0 { 1.0 } else { (checked as f64 / total as f64).clamp(0.0, 1.0) };
+            progress::emit_progress(
+                &app,
+                TaskProgressPayload {
+                    version,
+                    steps_total: STEPS_TOTAL,
+                    step: 1,
+                    step_name: "Check Updates".to_string(),
+                    step_progress,
+                    overall_percent: overall_from_step(1, step_progress, STEPS_TOTAL),
+                    detail,
+                    downloaded_bytes: None,
+                    total_bytes: None,
+                    extracted_files: Some(checked),
+                    total_files: Some(total),
+                },
+            );
+        }).await?;
+
+        if updatable.is_empty() {
+            progress::emit_progress(
+                &app,
+                TaskProgressPayload {
+                    version,
+                    steps_total: STEPS_TOTAL,
+                    step: 2,
+                    step_name: "Update Mods".to_string(),
+                    step_progress: 1.0,
+                    overall_percent: 100.0,
+                    detail: Some("No updates available".to_string()),
+                    downloaded_bytes: None,
+                    total_bytes: None,
+                    extracted_files: None,
+                    total_files: None,
+                },
+            );
+            return Ok(());
+        }
+
+        progress::emit_progress(
+            &app,
+            TaskProgressPayload {
+                version,
+                steps_total: STEPS_TOTAL,
+                step: 2,
+                step_name: "Update Mods".to_string(),
+                step_progress: 0.0,
+                overall_percent: overall_from_step(2, 0.0, STEPS_TOTAL),
+                detail: Some(format!("Updating {} mods...", updatable.len())),
+                downloaded_bytes: None,
+                total_bytes: None,
+                extracted_files: Some(0),
+                total_files: Some(updatable.len() as u64),
+            },
+        );
+
+        mods::update_mods_with_progress(&game_root, version, &mods_cfg, updatable.clone(), |done, total, detail| {
+            let step_progress = if total == 0 { 1.0 } else { (done as f64 / total as f64).clamp(0.0, 1.0) };
+            progress::emit_progress(
+                &app,
+                TaskProgressPayload {
+                    version,
+                    steps_total: STEPS_TOTAL,
+                    step: 2,
+                    step_name: "Update Mods".to_string(),
+                    step_progress,
+                    overall_percent: overall_from_step(2, step_progress, STEPS_TOTAL),
+                    detail,
+                    downloaded_bytes: None,
+                    total_bytes: None,
+                    extracted_files: Some(done),
+                    total_files: Some(total),
+                },
+            );
+        }).await?;
+
+        Ok(())
+    }.await;
+
+    match res {
+        Ok(()) => {
+            progress::emit_finished(
+                &app,
+                TaskFinishedPayload { version, path: version_dir(&app, version)?.to_string_lossy().to_string() },
+            );
+            Ok(true)
+        }
+        Err(e) => {
+            progress::emit_error(&app, TaskErrorPayload { version, message: e.clone() });
+            Err(e)
+        }
+    }
 }
 
 #[tauri::command]
@@ -380,11 +537,13 @@ fn set_mod_enabled(app: tauri::AppHandle, version: u32, dev: String, name: Strin
 #[tauri::command]
 async fn get_manifest() -> Result<ManifestDto, String> {
     let client = reqwest::Client::new();
-    let (version, cfg, chain_config) = mod_config::ModsConfig::fetch_manifest(&client).await?;
+    let (version, cfg, chain_config, manifests) =
+        mod_config::ModsConfig::fetch_manifest(&client).await?;
     Ok(ManifestDto {
         version,
         chain_config,
         mods: cfg.mods,
+        manifests,
     })
 }
 
@@ -567,18 +726,10 @@ fn write_config_file(app: tauri::AppHandle, args: WriteConfigArgs) -> Result<boo
 pub fn run() {
     tauri::Builder::default()
         .manage(GameState::default())
+        .manage(downloader::DepotLoginState::default())
         .setup(|app| {
             // File logging (AppDataDir/logs/hq-launcher.log)
             logger::init(&app.handle()).map_err(|e| tauri::Error::Setup(e.into()))?;
-
-            // On first run (app startup), sync latest installed version with remote manifest.
-            // This is additive-only: it won't overwrite existing config/mod files.
-            let handle = app.handle().clone();
-            tauri::async_runtime::spawn(async move {
-                if let Err(e) = installer::sync_latest_install_from_manifest(handle).await {
-                    log::error!("manifest sync failed: {e}");
-                }
-            });
 
             // tauri::async_runtime::spawn(async move {
             //     if let Err(e) = mods::update_mods_with_progress(&app, version).await {
@@ -591,7 +742,9 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
             download,
+            sync_latest_install_from_manifest,
             check_mod_updates,
+            apply_mod_updates,
             launch_game,
             get_game_status,
             stop_game,
@@ -605,7 +758,14 @@ pub fn run() {
             read_config_file,
             read_bepinex_cfg,
             set_bepinex_cfg_entry,
-            write_config_file
+            write_config_file,
+            downloader::depot_login,
+            downloader::depot_login_start,
+            downloader::depot_login_submit_code,
+            downloader::depot_get_login_state,
+            downloader::depot_logout,
+            downloader::depot_download,
+            downloader::depot_download_files,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

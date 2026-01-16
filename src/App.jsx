@@ -1,3 +1,188 @@
+export { default } from "./AppRoot";
+
+/*
+import { useEffect, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
+import LauncherPage from "./pages/LauncherPage";
+import { LoginDialog } from "./components/auth/LoginDialog";
+
+function Splash({ message }) {
+  return (
+    <div className="flex h-full w-full items-center justify-center p-6 text-white">
+      <div className="w-[min(520px,92vw)] rounded-3xl border border-white/10 bg-white/5 p-6">
+        <div className="text-lg font-semibold">HQ Launcher</div>
+        <div className="mt-2 text-sm text-white/55">{message}</div>
+      </div>
+    </div>
+  );
+}
+
+*/
+
+export default function App() {
+  const [loginState, setLoginState] = useState({
+    status: "loading", // loading | ready
+    is_logged_in: false,
+    username: null,
+  });
+  const [bootstrapError, setBootstrapError] = useState("");
+
+  async function refreshLoginState() {
+    try {
+      const s = await invoke("depot_get_login_state");
+      setLoginState({
+        status: "ready",
+        is_logged_in: !!s?.is_logged_in,
+        username: s?.username ?? null,
+      });
+      setBootstrapError("");
+    } catch (e) {
+      setLoginState({
+        status: "ready",
+        is_logged_in: false,
+        username: null,
+      });
+      setBootstrapError(e?.message ?? String(e));
+    }
+  }
+
+  useEffect(() => {
+    refreshLoginState();
+  }, []);
+
+  const needsLogin =
+    loginState.status === "ready" && loginState.is_logged_in !== true;
+
+  async function logout() {
+    try {
+      await invoke("depot_logout");
+    } catch {}
+    refreshLoginState();
+  }
+
+  return (
+    <div className="h-full w-full">
+      <div className="absolute inset-0 bg-[#0b0d12]" />
+      <div className="relative h-full w-full">
+        {loginState.status === "loading" ? (
+          <Splash message="Starting up..." />
+        ) : loginState.is_logged_in ? (
+          <LauncherPage loginState={loginState} onLogout={logout} />
+        ) : (
+          <Splash
+            message={
+              bootstrapError
+                ? `로그인 상태 확인 실패: ${bootstrapError}`
+                : "Steam 로그인 후 계속 진행할 수 있어요."
+            }
+          />
+        )}
+
+        <LoginDialog
+          open={needsLogin}
+          onLoggedIn={(s) =>
+            setLoginState({
+              status: "ready",
+              is_logged_in: !!s?.is_logged_in,
+              username: s?.username ?? null,
+            })
+          }
+        />
+      </div>
+    </div>
+  );
+}
+
+import { useEffect, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
+import LauncherPage from "./pages/LauncherPage";
+import { LoginDialog } from "./components/auth/LoginDialog";
+
+function Splash({ message }) {
+  return (
+    <div className="flex h-full w-full items-center justify-center p-6 text-white">
+      <div className="w-[min(520px,92vw)] rounded-3xl border border-white/10 bg-white/5 p-6">
+        <div className="text-lg font-semibold">HQ Launcher</div>
+        <div className="mt-2 text-sm text-white/55">{message}</div>
+      </div>
+    </div>
+  );
+}
+
+export default function App() {
+  const [loginState, setLoginState] = useState({
+    status: "loading", // loading | ready
+    is_logged_in: false,
+    username: null,
+  });
+  const [bootstrapError, setBootstrapError] = useState("");
+
+  async function refreshLoginState() {
+    try {
+      const s = await invoke("depot_get_login_state");
+      setLoginState({
+        status: "ready",
+        is_logged_in: !!s?.is_logged_in,
+        username: s?.username ?? null,
+      });
+      setBootstrapError("");
+    } catch (e) {
+      setLoginState({
+        status: "ready",
+        is_logged_in: false,
+        username: null,
+      });
+      setBootstrapError(e?.message ?? String(e));
+    }
+  }
+
+  useEffect(() => {
+    refreshLoginState();
+  }, []);
+
+  const needsLogin =
+    loginState.status === "ready" && loginState.is_logged_in !== true;
+
+  async function logout() {
+    try {
+      await invoke("depot_logout");
+    } catch {}
+    refreshLoginState();
+  }
+
+  return (
+    <div className="h-full w-full">
+      <div className="absolute inset-0 bg-[#0b0d12]" />
+      <div className="relative h-full w-full">
+        {loginState.status === "loading" ? (
+          <Splash message="Starting up..." />
+        ) : loginState.is_logged_in ? (
+          <LauncherPage loginState={loginState} onLogout={logout} />
+        ) : (
+          <Splash
+            message={
+              bootstrapError
+                ? `로그인 상태 확인 실패: ${bootstrapError}`
+                : "Steam 로그인 후 계속 진행할 수 있어요."
+            }
+          />
+        )}
+
+        <LoginDialog
+          open={needsLogin}
+          onLoggedIn={(s) =>
+            setLoginState({
+              status: "ready",
+              is_logged_in: !!s?.is_logged_in,
+              username: s?.username ?? null,
+            })
+          }
+        />
+      </div>
+    </div>
+  );
+}
+
 import { useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -369,7 +554,7 @@ export default function App() {
         version: v,
         error: e?.message ?? String(e),
       }));
-    }
+    }CheckUpdateTask
   }
 
   async function checkModUpdates(v) {

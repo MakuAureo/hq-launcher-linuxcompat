@@ -1,0 +1,96 @@
+import { useEffect, useRef, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
+import LauncherPage from "./pages/LauncherPage";
+import { LoginDialog } from "./components/auth/LoginDialog";
+
+function Splash({ message }) {
+  return (
+    <div className="flex h-full w-full items-center justify-center p-6 text-white">
+      <div className="w-[min(520px,92vw)] rounded-3xl border border-white/10 bg-white/5 p-6">
+        <div className="text-lg font-semibold">HQ Launcher</div>
+        <div className="mt-2 text-sm text-white/55">{message}</div>
+      </div>
+    </div>
+  );
+}
+
+export default function AppRoot() {
+  const [loginState, setLoginState] = useState({
+    status: "loading", // loading | ready
+    is_logged_in: false,
+    username: null,
+  });
+  const [bootstrapError, setBootstrapError] = useState("");
+  const [loginOpen, setLoginOpen] = useState(false);
+  const loginResolveRef = useRef(null);
+
+  async function refreshLoginState() {
+    try {
+      const s = await invoke("depot_get_login_state");
+      setLoginState({
+        status: "ready",
+        is_logged_in: !!s?.is_logged_in,
+        username: s?.username ?? null,
+      });
+      setBootstrapError("");
+    } catch (e) {
+      setLoginState({
+        status: "ready",
+        is_logged_in: false,
+        username: null,
+      });
+      setBootstrapError(e?.message ?? String(e));
+    }
+  }
+
+  useEffect(() => {
+    refreshLoginState();
+  }, []);
+
+  function requestLogin() {
+    setLoginOpen(true);
+    return new Promise((resolve) => {
+      loginResolveRef.current = resolve;
+    });
+  }
+
+  async function logout() {
+    try {
+      await invoke("depot_logout");
+    } catch {}
+    refreshLoginState();
+  }
+
+  return (
+    <div className="h-full w-full">
+      <div className="absolute inset-0 bg-[#0b0d12]" />
+      <div className="relative h-full w-full">
+        {loginState.status === "loading" ? (
+          <Splash message="Starting up..." />
+        ) : (
+          <LauncherPage
+            loginState={loginState}
+            onLogout={logout}
+            onRequireLogin={requestLogin}
+            bootstrapError={bootstrapError}
+          />
+        )}
+
+        <LoginDialog
+          open={loginOpen}
+          onLoggedIn={(s) => {
+            setLoginState({
+              status: "ready",
+              is_logged_in: !!s?.is_logged_in,
+              username: s?.username ?? null,
+            });
+            setLoginOpen(false);
+            if (loginResolveRef.current) loginResolveRef.current(true);
+            loginResolveRef.current = null;
+          }}
+        />
+      </div>
+    </div>
+  );
+}
+
