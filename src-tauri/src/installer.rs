@@ -216,8 +216,101 @@ fn ensure_config_junction(app: &tauri::AppHandle, game_root: &Path) -> Result<Pa
     Ok(shared)
 }
 
+/// Download default config if shared config directory is empty or missing.
+/// This is called on app startup to ensure config files exist.
+pub async fn ensure_default_config(app: tauri::AppHandle) -> Result<(), String> {
+    let shared_config = shared_config_dir(&app)?;
+    
+    // Check if config directory exists and has files (other than BepInEx.cfg which is auto-generated)
+    let needs_download = if !shared_config.exists() {
+        true
+    } else {
+        // Check if directory is empty or only has BepInEx.cfg
+        let mut has_other_files = false;
+        if let Ok(entries) = std::fs::read_dir(&shared_config) {
+            for entry in entries {
+                if let Ok(entry) = entry {
+                    let name = entry.file_name();
+                    let name_str = name.to_string_lossy();
+                    // Ignore BepInEx.cfg which is auto-generated
+                    if name_str != "BepInEx.cfg" {
+                        has_other_files = true;
+                        break;
+                    }
+                }
+            }
+        }
+        !has_other_files
+    };
+
+    if !needs_download {
+        log::info!("Config directory already has files, skipping download");
+        return Ok(());
+    }
+
+    log::info!("Config directory is empty or missing, downloading default config");
+
+    let client = reqwest::Client::new();
+    let config_zip_url = "https://f.asta.rs/hq-launcher/default_config.zip";
+    log::info!("Downloading config from {}", config_zip_url);
+    
+    let response = client
+        .get(config_zip_url)
+        .header("User-Agent", "hq-launcher/0.1 (tauri)")
+        .send()
+        .await
+        .map_err(|e| format!("Failed to download config: {e}"))?;
+    
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        return Err(format!("Config download failed with status {}: {}", status, body));
+    }
+    
+    let cfg_bytes = response
+        .bytes()
+        .await
+        .map_err(|e| format!("Failed to read config response: {e}"))?;
+    
+    log::info!("Downloaded {} bytes of config", cfg_bytes.len());
+
+    // Create temporary directory for extraction
+    let temp_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("failed to resolve app data dir: {e}"))?
+        .join("temp");
+    std::fs::create_dir_all(&temp_dir).map_err(|e| e.to_string())?;
+    
+    let cfg_zip_path = temp_dir.join("default_config.zip");
+    std::fs::write(&cfg_zip_path, &cfg_bytes).map_err(|e| e.to_string())?;
+
+    // Ensure shared config directory exists
+    std::fs::create_dir_all(&shared_config).map_err(|e| e.to_string())?;
+
+    // Extract config (add-only, won't overwrite existing files)
+    let cfg_zip_path2 = cfg_zip_path.clone();
+    let config_dir2 = shared_config.clone();
+    
+    tauri::async_runtime::spawn_blocking(move || -> Result<(), String> {
+        zip_utils::extract_config_zip_into_bepinex_config_with_progress(
+            &cfg_zip_path2,
+            &config_dir2,
+            |_done, _total, _name| {}, // No progress reporting for background download
+        )?;
+        let _ = std::fs::remove_file(&cfg_zip_path2);
+        Ok(())
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+
+    log::info!("Default config extracted successfully");
+    Ok(())
+}
+
 /// On app startup: compare local applied manifest version with remote manifest version.
 /// If different, apply updates **additively** to the latest installed version (no overwrites).
+/// Note: Config is no longer synced here - use ensure_default_config() on app startup instead.
 pub async fn sync_latest_install_from_manifest(app: tauri::AppHandle) -> Result<(), String> {
     let Some((game_version, game_root)) = latest_installed_version_dir(&app)? else {
         return Ok(());
@@ -239,96 +332,20 @@ pub async fn sync_latest_install_from_manifest(app: tauri::AppHandle) -> Result<
         remote_manifest_version
     );
 
-    // Two-step sync: config + mods (add-only).
-    const STEPS_TOTAL: u32 = 2;
+    // One-step sync: mods only (config is handled separately on app startup).
+    const STEPS_TOTAL: u32 = 1;
     let sync_res: Result<(), String> = async {
 
-        // Step 1: config
+        // Step 1: mods
         progress::emit_progress(
             &app,
             TaskProgressPayload {
                 version: game_version,
                 steps_total: STEPS_TOTAL,
                 step: 1,
-                step_name: "Sync Config".to_string(),
-                step_progress: 0.0,
-                overall_percent: overall_from_step(1, 0.0, STEPS_TOTAL),
-                detail: Some("Downloading default_config.zip...".to_string()),
-                downloaded_bytes: None,
-                total_bytes: None,
-                extracted_files: Some(0),
-                total_files: None,
-            },
-        );
-
-        let config_zip_url = "https://f.asta.rs/hq-launcher/default_config.zip";
-        let cfg_bytes = client
-            .get(config_zip_url)
-            .send()
-            .await
-            .map_err(|e| e.to_string())?
-            .error_for_status()
-            .map_err(|e| e.to_string())?
-            .bytes()
-            .await
-            .map_err(|e| e.to_string())?;
-
-        let cfg_tmp_dir = game_root.join(".hq-launcher").join("tmp").join("config");
-        std::fs::create_dir_all(&cfg_tmp_dir).map_err(|e| e.to_string())?;
-        let cfg_zip_path = cfg_tmp_dir.join("default_config.zip");
-        std::fs::write(&cfg_zip_path, &cfg_bytes).map_err(|e| e.to_string())?;
-
-        // Ensure shared config junction, then extract into the shared dir (add-only).
-        let shared_config = ensure_config_junction(&app, &game_root)?;
-        let cfg_zip_path2 = cfg_zip_path.clone();
-        let config_dir2 = shared_config.clone();
-        let app_clone = app.clone();
-
-        tauri::async_runtime::spawn_blocking(move || -> Result<(), String> {
-            zip_utils::extract_config_zip_into_bepinex_config_with_progress(
-                &cfg_zip_path2,
-                &config_dir2,
-                |done, total, name| {
-                    let step_progress = if total == 0 {
-                        1.0
-                    } else {
-                        (done as f64 / total as f64).clamp(0.0, 1.0)
-                    };
-                    let detail = name.map(|n| format!("{done}/{total} • {n}"));
-                    progress::emit_progress(
-                        &app_clone,
-                        TaskProgressPayload {
-                            version: game_version,
-                            steps_total: STEPS_TOTAL,
-                            step: 1,
-                            step_name: "Sync Config".to_string(),
-                            step_progress,
-                            overall_percent: overall_from_step(1, step_progress, STEPS_TOTAL),
-                            detail,
-                            downloaded_bytes: None,
-                            total_bytes: None,
-                            extracted_files: Some(done),
-                            total_files: Some(total),
-                        },
-                    );
-                },
-            )?;
-            let _ = std::fs::remove_file(&cfg_zip_path2);
-            Ok(())
-        })
-        .await
-        .map_err(|e| e.to_string())??;
-
-        // Step 2: mods
-        progress::emit_progress(
-            &app,
-            TaskProgressPayload {
-                version: game_version,
-                steps_total: STEPS_TOTAL,
-                step: 2,
                 step_name: "Sync Mods".to_string(),
                 step_progress: 0.0,
-                overall_percent: overall_from_step(2, 0.0, STEPS_TOTAL),
+                overall_percent: overall_from_step(1, 0.0, STEPS_TOTAL),
                 detail: Some("Applying manifest...".to_string()),
                 downloaded_bytes: None,
                 total_bytes: None,
@@ -349,10 +366,10 @@ pub async fn sync_latest_install_from_manifest(app: tauri::AppHandle) -> Result<
                 TaskProgressPayload {
                     version: game_version,
                     steps_total: STEPS_TOTAL,
-                    step: 2,
+                    step: 1,
                     step_name: "Sync Mods".to_string(),
                     step_progress,
-                    overall_percent: overall_from_step(2, step_progress, STEPS_TOTAL),
+                    overall_percent: overall_from_step(1, step_progress, STEPS_TOTAL),
                     detail,
                     downloaded_bytes: None,
                     total_bytes: None,
@@ -369,7 +386,7 @@ pub async fn sync_latest_install_from_manifest(app: tauri::AppHandle) -> Result<
             TaskProgressPayload {
                 version: game_version,
                 steps_total: STEPS_TOTAL,
-                step: 2,
+                step: 1,
                 step_name: "Sync Mods".to_string(),
                 step_progress: 1.0,
                 overall_percent: 100.0,
@@ -684,7 +701,7 @@ pub async fn download_and_setup(app: tauri::AppHandle, version: u32) -> Result<b
             },
         );
 
-        // Step 4: Config 설치
+        // Step 4: Config junction 설정 (config 다운로드는 앱 시작 시 별도로 처리)
         emit_progress(
             &app,
             TaskProgressPayload {
@@ -694,7 +711,7 @@ pub async fn download_and_setup(app: tauri::AppHandle, version: u32) -> Result<b
                 step_name: "Install Config".to_string(),
                 step_progress: 0.0,
                 overall_percent: overall_from_step(4, 0.0, STEPS_TOTAL),
-                detail: Some("Setting up config...".to_string()),
+                detail: Some("Setting up config junction...".to_string()),
                 downloaded_bytes: None,
                 total_bytes: None,
                 extracted_files: None,
@@ -703,7 +720,7 @@ pub async fn download_and_setup(app: tauri::AppHandle, version: u32) -> Result<b
         );
 
         // Config directory is a junction to AppData/config/shared.
-        // This also seeds shared config additively from any extracted config files.
+        // Config files are downloaded separately on app startup if needed.
         let _shared = ensure_config_junction(&app, &extract_dir)?;
 
         emit_progress(
@@ -715,7 +732,7 @@ pub async fn download_and_setup(app: tauri::AppHandle, version: u32) -> Result<b
                 step_name: "Install Config".to_string(),
                 step_progress: 1.0,
                 overall_percent: overall_from_step(4, 1.0, STEPS_TOTAL),
-                detail: Some("Config ready".to_string()),
+                detail: Some("Config junction ready".to_string()),
                 downloaded_bytes: None,
                 total_bytes: None,
                 extracted_files: None,

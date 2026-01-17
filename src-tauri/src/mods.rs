@@ -348,11 +348,27 @@ where
                     Some(mod_label.clone()),
                 );
             }
-            continue;
+        } else {
+            // Plugin folder doesn't exist, but mod is in remote manifest - mark as updatable (installable)
+            if spec.is_compatible(game_version) {
+                log::info!("{} is missing but available in manifest - can install", mod_label.clone());
+                on_progress(
+                    idx,
+                    total_mods,
+                    Some(format!("{} is missing but available - can install", mod_label.clone())),
+                    Some(mod_label.clone()),
+                );
+            } else {
+                let why = incompatible_reason(spec, game_version);
+                log::info!("{} is missing but incompatible{}", mod_label.clone(), why);
+                on_progress(
+                    idx,
+                    total_mods,
+                    Some(format!("{} is missing but incompatible{}", mod_label.clone(), why)),
+                    None,
+                );
+            }
         }
-        
-        log::info!("{} pass mod", mod_label.clone());
-        on_progress(idx, total_mods, Some(format!("{} pass mod", mod_label.clone())), None);
     }
 
     on_progress(total_mods, total_mods, Some("Finished".to_string()), None);

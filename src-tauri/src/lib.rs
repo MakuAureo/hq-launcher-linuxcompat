@@ -731,11 +731,13 @@ pub fn run() {
             // File logging (AppDataDir/logs/hq-launcher.log)
             logger::init(&app.handle()).map_err(|e| tauri::Error::Setup(e.into()))?;
 
-            // tauri::async_runtime::spawn(async move {
-            //     if let Err(e) = mods::update_mods_with_progress(&app, version).await {
-            //         log::error!("mod update failed: {e}");
-            //     }
-            // });
+            // Ensure default config is downloaded on app startup if config directory is empty
+            let app_handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                if let Err(e) = installer::ensure_default_config(app_handle).await {
+                    log::warn!("Failed to ensure default config on startup: {e}");
+                }
+            });
 
             Ok(())
         })
