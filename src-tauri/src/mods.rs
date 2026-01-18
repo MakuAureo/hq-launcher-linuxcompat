@@ -33,7 +33,9 @@ fn cmp_version_str(a: &str, b: &str) -> Ordering {
     }
 }
 
-fn latest_pkg_version<'a>(versions: &'a [thunderstore::PackageVersion]) -> Option<&'a thunderstore::PackageVersion> {
+fn latest_pkg_version<'a>(
+    versions: &'a [thunderstore::PackageVersion],
+) -> Option<&'a thunderstore::PackageVersion> {
     versions
         .iter()
         .max_by(|a, b| cmp_version_str(&a.version_number, &b.version_number))
@@ -47,7 +49,6 @@ fn thunderstore_download_url(dev: &str, name: &str, version: &str) -> String {
         dev, name, version
     )
 }
-
 
 pub fn plugins_dir(game_root: &Path) -> PathBuf {
     game_root.join("BepInEx").join("plugins")
@@ -95,40 +96,74 @@ where
         // Folder name is deterministic (does not include the mod version).
         let already_dir = target_plugins.join(format!("{}-{}", spec.dev, spec.name));
         if already_dir.exists() {
-            log::info!("{}/{}  |  {}-{} Start Check", idx + 1, cfg.mods.len(), spec.dev, spec.name);
+            log::info!(
+                "{}/{}  |  {}-{} Start Check",
+                idx + 1,
+                cfg.mods.len(),
+                spec.dev,
+                spec.name
+            );
 
             let path = target_plugins.join(format!("{}-{}/manifest.json", spec.dev, spec.name));
             let manifest = read_manifest(&path)?;
 
-
-            let version_limit = spec.version_config.get(&game_version).unwrap_or(&"0.0.0".to_string()).clone();
+            let version_limit = spec
+                .version_config
+                .get(&game_version)
+                .unwrap_or(&"0.0.0".to_string())
+                .clone();
             installed = installed.saturating_add(1);
             if version_limit == "0.0.0" {
-                let new_version = packages.clone().iter().find(|p| p.owner.to_lowercase() == spec.dev.to_lowercase() && p.name.to_lowercase() == spec.name.to_lowercase()).map(|p| p.versions.first().map(|v| v.version_number.clone()).unwrap_or_else(|| "0.0.0".to_string())).unwrap_or_else(|| "0.0.0".to_string());
-                
+                let new_version = packages
+                    .clone()
+                    .iter()
+                    .find(|p| {
+                        p.owner.to_lowercase() == spec.dev.to_lowercase()
+                            && p.name.to_lowercase() == spec.name.to_lowercase()
+                    })
+                    .map(|p| {
+                        p.versions
+                            .first()
+                            .map(|v| v.version_number.clone())
+                            .unwrap_or_else(|| "0.0.0".to_string())
+                    })
+                    .unwrap_or_else(|| "0.0.0".to_string());
+
                 if manifest.version_number == new_version {
                     continue;
                 }
-                log::info!("Updating {}-{} from {old_version} to {new_version}" , spec.dev, spec.name, old_version=manifest.version_number);
+                log::info!(
+                    "Updating {}-{} from {old_version} to {new_version}",
+                    spec.dev,
+                    spec.name,
+                    old_version = manifest.version_number
+                );
             } else if manifest.version_number != version_limit {
-                log::info!("Updating {}-{} from {old_version} to {version_limit}" , spec.dev, spec.name, old_version=manifest.version_number);
+                log::info!(
+                    "Updating {}-{} from {old_version} to {version_limit}",
+                    spec.dev,
+                    spec.name,
+                    old_version = manifest.version_number
+                );
             } else {
                 on_progress(
                     installed,
                     total_mods,
-                    Some(format!("Skipped {}/{}  |  {}-{} (version equal)", idx + 1, cfg.mods.len(), spec.dev, spec.name)),
+                    Some(format!(
+                        "Skipped {}/{}  |  {}-{} (version equal)",
+                        idx + 1,
+                        cfg.mods.len(),
+                        spec.dev,
+                        spec.name
+                    )),
                 );
                 continue;
             }
-            
+
             // log::info!("\tcurrent_version: {:#?}", current_version);
         }
 
-        let mod_label = format!(
-            "{}-{}",
-            spec.dev,
-            spec.name
-        );
+        let mod_label = format!("{}-{}", spec.dev, spec.name);
 
         if !spec.is_compatible(game_version) {
             installed = installed.saturating_add(1);
@@ -142,7 +177,11 @@ where
             continue;
         }
 
-        on_progress(installed, total_mods, Some(format!("Resolving {mod_label}")));
+        on_progress(
+            installed,
+            total_mods,
+            Some(format!("Resolving {mod_label}")),
+        );
 
         let key = (spec.dev.to_lowercase(), spec.name.to_lowercase());
         let Some(pkg) = package_map.get(&key) else {
@@ -151,7 +190,9 @@ where
             on_progress(
                 installed,
                 total_mods,
-                Some(format!("Failed to resolve {mod_label} (not found in package list)")),
+                Some(format!(
+                    "Failed to resolve {mod_label} (not found in package list)"
+                )),
             );
             continue;
         };
@@ -162,7 +203,9 @@ where
             if pkg.versions.iter().any(|v| v.version_number == pin) {
                 pin.to_string()
             } else {
-                log::warn!("Pinned version not found for {mod_label}: {pin} (falling back to latest)");
+                log::warn!(
+                    "Pinned version not found for {mod_label}: {pin} (falling back to latest)"
+                );
                 latest_pkg_version(&pkg.versions)
                     .map(|v| v.version_number.clone())
                     .unwrap_or_else(|| "0.0.0".to_string())
@@ -206,11 +249,15 @@ where
             .bytes()
             .await
             .map_err(|e| e.to_string())?;
-        
+
         std::fs::write(&zip_path, &bytes).map_err(|e| e.to_string())?;
 
         // Extract directly into BepInEx/plugins, then delete the zip.
-        on_progress(installed, total_mods, Some(format!("Extracting {mod_label}")));
+        on_progress(
+            installed,
+            total_mods,
+            Some(format!("Extracting {mod_label}")),
+        );
         let folder_name = format!("{}-{}", spec.dev, spec.name);
 
         if let Err(e) = extract_thunderstore_into_plugins_with_progress(
@@ -236,7 +283,11 @@ where
         }
 
         installed = installed.saturating_add(1);
-        on_progress(installed, total_mods, Some(format!("Installed {mod_label}")));
+        on_progress(
+            installed,
+            total_mods,
+            Some(format!("Installed {mod_label}")),
+        );
     }
 
     // Best-effort cleanup of temp workspace.
@@ -244,17 +295,6 @@ where
 
     Ok(())
 }
-
-
-
-
-
-
-
-
-
-
-
 
 pub async fn updatable_mods_with_progress<F>(
     game_root: &Path,
@@ -290,7 +330,6 @@ where
     }
     std::fs::create_dir_all(&temp_root).map_err(|e| e.to_string())?;
 
-    
     on_progress(0, total_mods, Some("Starting...".to_string()), None);
 
     for (idx, spec) in cfg.mods.iter().enumerate() {
@@ -298,11 +337,7 @@ where
         // Folder name is deterministic (does not include the mod version).
         let idx = idx as u64 + 1;
         let already_dir = target_plugins.join(format!("{}-{}", spec.dev, spec.name));
-        let mod_label = format!(
-            "{}-{}",
-            spec.dev,
-            spec.name
-        );
+        let mod_label = format!("{}-{}", spec.dev, spec.name);
         if already_dir.exists() {
             let path = target_plugins.join(format!("{}-{}/manifest.json", spec.dev, spec.name));
             let manifest = read_manifest(&path)?;
@@ -336,11 +371,19 @@ where
                 on_progress(
                     idx,
                     total_mods,
-                    Some(format!("{} is already the latest version", mod_label.clone())),
+                    Some(format!(
+                        "{} is already the latest version",
+                        mod_label.clone()
+                    )),
                     None,
                 );
             } else {
-                log::info!("{} mod can update ({} -> {})", mod_label.clone(), manifest.version_number, desired_version);
+                log::info!(
+                    "{} mod can update ({} -> {})",
+                    mod_label.clone(),
+                    manifest.version_number,
+                    desired_version
+                );
                 on_progress(
                     idx,
                     total_mods,
@@ -351,11 +394,17 @@ where
         } else {
             // Plugin folder doesn't exist, but mod is in remote manifest - mark as updatable (installable)
             if spec.is_compatible(game_version) {
-                log::info!("{} is missing but available in manifest - can install", mod_label.clone());
+                log::info!(
+                    "{} is missing but available in manifest - can install",
+                    mod_label.clone()
+                );
                 on_progress(
                     idx,
                     total_mods,
-                    Some(format!("{} is missing but available - can install", mod_label.clone())),
+                    Some(format!(
+                        "{} is missing but available - can install",
+                        mod_label.clone()
+                    )),
                     Some(mod_label.clone()),
                 );
             } else {
@@ -364,7 +413,11 @@ where
                 on_progress(
                     idx,
                     total_mods,
-                    Some(format!("{} is missing but incompatible{}", mod_label.clone(), why)),
+                    Some(format!(
+                        "{} is missing but incompatible{}",
+                        mod_label.clone(),
+                        why
+                    )),
                     None,
                 );
             }
@@ -375,7 +428,6 @@ where
 
     Ok(())
 }
-
 
 pub async fn update_mods_with_progress<F>(
     game_root: &Path,
@@ -416,17 +468,17 @@ where
         // Add-only: if a plugin folder already exists for this mod, skip it.
         // Folder name is deterministic (does not include the mod version).
 
-        let mod_label = format!(
-            "{}-{}",
-            spec.dev,
-            spec.name
-        );
+        let mod_label = format!("{}-{}", spec.dev, spec.name);
 
         if !updatable_mods.contains(&mod_label) {
             continue;
         }
 
-        on_progress(installed, total_mods, Some(format!("Resolving {mod_label}")));
+        on_progress(
+            installed,
+            total_mods,
+            Some(format!("Resolving {mod_label}")),
+        );
 
         let key = (spec.dev.to_lowercase(), spec.name.to_lowercase());
         let Some(pkg) = package_map.get(&key) else {
@@ -435,7 +487,9 @@ where
             on_progress(
                 installed,
                 total_mods,
-                Some(format!("Failed to resolve {mod_label} (not found in package list)")),
+                Some(format!(
+                    "Failed to resolve {mod_label} (not found in package list)"
+                )),
             );
             continue;
         };
@@ -445,7 +499,9 @@ where
             if pkg.versions.iter().any(|v| v.version_number == pin) {
                 pin.to_string()
             } else {
-                log::warn!("Pinned version not found for {mod_label}: {pin} (falling back to latest)");
+                log::warn!(
+                    "Pinned version not found for {mod_label}: {pin} (falling back to latest)"
+                );
                 latest_pkg_version(&pkg.versions)
                     .map(|v| v.version_number.clone())
                     .unwrap_or_else(|| "0.0.0".to_string())
@@ -489,11 +545,15 @@ where
             .bytes()
             .await
             .map_err(|e| e.to_string())?;
-        
+
         std::fs::write(&zip_path, &bytes).map_err(|e| e.to_string())?;
 
         // Extract directly into BepInEx/plugins, then delete the zip.
-        on_progress(installed, total_mods, Some(format!("Extracting {mod_label}")));
+        on_progress(
+            installed,
+            total_mods,
+            Some(format!("Extracting {mod_label}")),
+        );
         let folder_name = format!("{}-{}", spec.dev, spec.name);
         let existing = target_plugins.join(&folder_name);
         if existing.exists() {
@@ -529,7 +589,11 @@ where
         }
 
         installed = installed.saturating_add(1);
-        on_progress(installed, total_mods, Some(format!("Installed {mod_label}")));
+        on_progress(
+            installed,
+            total_mods,
+            Some(format!("Installed {mod_label}")),
+        );
     }
 
     // Best-effort cleanup of temp workspace.
@@ -537,10 +601,6 @@ where
 
     Ok(())
 }
-
-
-
-
 
 fn incompatible_reason(spec: &ModEntry, game_version: u32) -> String {
     let mut parts: Vec<String> = vec![];
@@ -556,4 +616,3 @@ fn incompatible_reason(spec: &ModEntry, game_version: u32) -> String {
     }
     parts.join("")
 }
-

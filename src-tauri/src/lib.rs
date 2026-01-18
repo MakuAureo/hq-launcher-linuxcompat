@@ -1,20 +1,23 @@
-mod installer;
 mod bepinex_cfg;
+mod downloader;
+mod installer;
 mod logger;
-mod mods;
 mod mod_config;
+mod mods;
 mod progress;
 mod thunderstore;
 mod zip_utils;
-mod downloader;
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::sync::Mutex;
 use tauri::{Manager, State};
 
-use crate::{mod_config::ModsConfig, progress::{TaskFinishedPayload, TaskUpdatableProgressPayload}};
 use crate::progress::{TaskErrorPayload, TaskProgressPayload};
+use crate::{
+    mod_config::ModsConfig,
+    progress::{TaskFinishedPayload, TaskUpdatableProgressPayload},
+};
 
 fn overall_from_step(step: u32, step_progress: f64, steps_total: u32) -> f64 {
     if steps_total == 0 {
@@ -59,7 +62,11 @@ fn version_dir(app: &tauri::AppHandle, version: u32) -> Result<std::path::PathBu
         .join(format!("v{version}")))
 }
 
-fn find_file_named(root: &std::path::Path, target_name: &str, max_depth: usize) -> Option<std::path::PathBuf> {
+fn find_file_named(
+    root: &std::path::Path,
+    target_name: &str,
+    max_depth: usize,
+) -> Option<std::path::PathBuf> {
     let target_lower = target_name.to_lowercase();
     let mut stack: Vec<(std::path::PathBuf, usize)> = vec![(root.to_path_buf(), 0)];
 
@@ -249,15 +256,14 @@ async fn check_mod_updates(app: tauri::AppHandle, version: u32) -> Result<bool, 
     let client = reqwest::Client::new();
 
     let dir = app
-            .path()
-            .app_data_dir()
-            .map_err(|e| format!("failed to resolve app data dir: {e}"))?
-            .join("versions");
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("failed to resolve app data dir: {e}"))?
+        .join("versions");
     let extract_dir = dir.join(format!("v{version}"));
     let (_, mods_cfg, _, _) = ModsConfig::fetch_manifest(&client).await?;
 
     let mut updatable_mods: Vec<String> = vec![];
-
 
     mods::updatable_mods_with_progress(
         &extract_dir,
@@ -269,10 +275,15 @@ async fn check_mod_updates(app: tauri::AppHandle, version: u32) -> Result<bool, 
                     updatable_mods.push(mod_name.clone());
                 }
             }
-            
+
             progress::emit_updatable_progress(
                 &app,
-                TaskUpdatableProgressPayload { total,  checked, updatable_mods: updatable_mods.clone(), detail }
+                TaskUpdatableProgressPayload {
+                    total,
+                    checked,
+                    updatable_mods: updatable_mods.clone(),
+                    detail,
+                },
             );
         },
     )
@@ -280,7 +291,10 @@ async fn check_mod_updates(app: tauri::AppHandle, version: u32) -> Result<bool, 
 
     progress::emit_updatable_finished(
         &app,
-        TaskFinishedPayload { version, path: extract_dir.to_string_lossy().to_string() }
+        TaskFinishedPayload {
+            version,
+            path: extract_dir.to_string_lossy().to_string(),
+        },
     );
     Ok(true)
 }
@@ -297,7 +311,10 @@ async fn apply_mod_updates(app: tauri::AppHandle, version: u32) -> Result<bool, 
             .join("versions");
         let game_root = dir.join(format!("v{version}"));
         if !game_root.exists() {
-            return Err(format!("version folder not found: {}", game_root.to_string_lossy()));
+            return Err(format!(
+                "version folder not found: {}",
+                game_root.to_string_lossy()
+            ));
         }
 
         let (_, mods_cfg, _, _) = ModsConfig::fetch_manifest(&client).await?;
@@ -321,30 +338,40 @@ async fn apply_mod_updates(app: tauri::AppHandle, version: u32) -> Result<bool, 
         );
 
         let mut updatable: Vec<String> = vec![];
-        mods::updatable_mods_with_progress(&game_root, version, &mods_cfg, |checked, total, detail, mod_name| {
-            if let Some(m) = mod_name {
-                if !updatable.contains(&m) {
-                    updatable.push(m);
+        mods::updatable_mods_with_progress(
+            &game_root,
+            version,
+            &mods_cfg,
+            |checked, total, detail, mod_name| {
+                if let Some(m) = mod_name {
+                    if !updatable.contains(&m) {
+                        updatable.push(m);
+                    }
                 }
-            }
-            let step_progress = if total == 0 { 1.0 } else { (checked as f64 / total as f64).clamp(0.0, 1.0) };
-            progress::emit_progress(
-                &app,
-                TaskProgressPayload {
-                    version,
-                    steps_total: STEPS_TOTAL,
-                    step: 1,
-                    step_name: "Check Updates".to_string(),
-                    step_progress,
-                    overall_percent: overall_from_step(1, step_progress, STEPS_TOTAL),
-                    detail,
-                    downloaded_bytes: None,
-                    total_bytes: None,
-                    extracted_files: Some(checked),
-                    total_files: Some(total),
-                },
-            );
-        }).await?;
+                let step_progress = if total == 0 {
+                    1.0
+                } else {
+                    (checked as f64 / total as f64).clamp(0.0, 1.0)
+                };
+                progress::emit_progress(
+                    &app,
+                    TaskProgressPayload {
+                        version,
+                        steps_total: STEPS_TOTAL,
+                        step: 1,
+                        step_name: "Check Updates".to_string(),
+                        step_progress,
+                        overall_percent: overall_from_step(1, step_progress, STEPS_TOTAL),
+                        detail,
+                        downloaded_bytes: None,
+                        total_bytes: None,
+                        extracted_files: Some(checked),
+                        total_files: Some(total),
+                    },
+                );
+            },
+        )
+        .await?;
 
         if updatable.is_empty() {
             progress::emit_progress(
@@ -383,49 +410,77 @@ async fn apply_mod_updates(app: tauri::AppHandle, version: u32) -> Result<bool, 
             },
         );
 
-        mods::update_mods_with_progress(&game_root, version, &mods_cfg, updatable.clone(), |done, total, detail| {
-            let step_progress = if total == 0 { 1.0 } else { (done as f64 / total as f64).clamp(0.0, 1.0) };
-            progress::emit_progress(
-                &app,
-                TaskProgressPayload {
-                    version,
-                    steps_total: STEPS_TOTAL,
-                    step: 2,
-                    step_name: "Update Mods".to_string(),
-                    step_progress,
-                    overall_percent: overall_from_step(2, step_progress, STEPS_TOTAL),
-                    detail,
-                    downloaded_bytes: None,
-                    total_bytes: None,
-                    extracted_files: Some(done),
-                    total_files: Some(total),
-                },
-            );
-        }).await?;
+        mods::update_mods_with_progress(
+            &game_root,
+            version,
+            &mods_cfg,
+            updatable.clone(),
+            |done, total, detail| {
+                let step_progress = if total == 0 {
+                    1.0
+                } else {
+                    (done as f64 / total as f64).clamp(0.0, 1.0)
+                };
+                progress::emit_progress(
+                    &app,
+                    TaskProgressPayload {
+                        version,
+                        steps_total: STEPS_TOTAL,
+                        step: 2,
+                        step_name: "Update Mods".to_string(),
+                        step_progress,
+                        overall_percent: overall_from_step(2, step_progress, STEPS_TOTAL),
+                        detail,
+                        downloaded_bytes: None,
+                        total_bytes: None,
+                        extracted_files: Some(done),
+                        total_files: Some(total),
+                    },
+                );
+            },
+        )
+        .await?;
 
         Ok(())
-    }.await;
+    }
+    .await;
 
     match res {
         Ok(()) => {
             progress::emit_finished(
                 &app,
-                TaskFinishedPayload { version, path: version_dir(&app, version)?.to_string_lossy().to_string() },
+                TaskFinishedPayload {
+                    version,
+                    path: version_dir(&app, version)?.to_string_lossy().to_string(),
+                },
             );
             Ok(true)
         }
         Err(e) => {
-            progress::emit_error(&app, TaskErrorPayload { version, message: e.clone() });
+            progress::emit_error(
+                &app,
+                TaskErrorPayload {
+                    version,
+                    message: e.clone(),
+                },
+            );
             Err(e)
         }
     }
 }
 
 #[tauri::command]
-fn launch_game(app: tauri::AppHandle, version: u32, state: State<'_, GameState>) -> Result<u32, String> {
+fn launch_game(
+    app: tauri::AppHandle,
+    version: u32,
+    state: State<'_, GameState>,
+) -> Result<u32, String> {
     let dir = version_dir(&app, version)?;
     if !dir.exists() {
-        return Err(format!("version folder not found: {}", dir.to_string_lossy()));
+        return Err(format!(
+            "version folder not found: {}",
+            dir.to_string_lossy()
+        ));
     }
 
     let exe_name = "Lethal Company.exe";
@@ -443,7 +498,10 @@ fn launch_game(app: tauri::AppHandle, version: u32, state: State<'_, GameState>)
 
     // If already running, return an error.
     {
-        let mut guard = state.child.lock().map_err(|_| "game state lock poisoned".to_string())?;
+        let mut guard = state
+            .child
+            .lock()
+            .map_err(|_| "game state lock poisoned".to_string())?;
         if let Some(child) = guard.as_mut() {
             if child.try_wait().map_err(|e| e.to_string())?.is_none() {
                 return Err("game is already running".to_string());
@@ -461,14 +519,20 @@ fn launch_game(app: tauri::AppHandle, version: u32, state: State<'_, GameState>)
         .map_err(|e| format!("failed to launch: {e}"))?;
 
     let pid = child.id();
-    let mut guard = state.child.lock().map_err(|_| "game state lock poisoned".to_string())?;
+    let mut guard = state
+        .child
+        .lock()
+        .map_err(|_| "game state lock poisoned".to_string())?;
     *guard = Some(child);
     Ok(pid)
 }
 
 #[tauri::command]
 fn get_game_status(state: State<'_, GameState>) -> Result<GameStatus, String> {
-    let mut guard = state.child.lock().map_err(|_| "game state lock poisoned".to_string())?;
+    let mut guard = state
+        .child
+        .lock()
+        .map_err(|_| "game state lock poisoned".to_string())?;
     if let Some(child) = guard.as_mut() {
         match child.try_wait().map_err(|e| e.to_string())? {
             None => Ok(GameStatus {
@@ -493,7 +557,10 @@ fn get_game_status(state: State<'_, GameState>) -> Result<GameStatus, String> {
 
 #[tauri::command]
 fn stop_game(state: State<'_, GameState>) -> Result<bool, String> {
-    let mut guard = state.child.lock().map_err(|_| "game state lock poisoned".to_string())?;
+    let mut guard = state
+        .child
+        .lock()
+        .map_err(|_| "game state lock poisoned".to_string())?;
     if let Some(mut child) = guard.take() {
         let _ = child.kill();
         let _ = child.wait();
@@ -515,7 +582,13 @@ fn apply_disabled_mods(app: tauri::AppHandle, version: u32) -> Result<bool, Stri
 }
 
 #[tauri::command]
-fn set_mod_enabled(app: tauri::AppHandle, version: u32, dev: String, name: String, enabled: bool) -> Result<bool, String> {
+fn set_mod_enabled(
+    app: tauri::AppHandle,
+    version: u32,
+    dev: String,
+    name: String,
+    enabled: bool,
+) -> Result<bool, String> {
     let mut list = read_disablemod(&app)?;
 
     // Use normalized ids in the file.
@@ -523,7 +596,8 @@ fn set_mod_enabled(app: tauri::AppHandle, version: u32, dev: String, name: Strin
     list.mods.retain(|m| *m != id);
     if !enabled {
         list.mods.push(id);
-        list.mods.sort_by(|a, b| a.dev.cmp(&b.dev).then(a.name.cmp(&b.name)));
+        list.mods
+            .sort_by(|a, b| a.dev.cmp(&b.dev).then(a.name.cmp(&b.name)));
         list.mods.dedup();
     }
     write_disablemod(&app, &list)?;
@@ -650,7 +724,10 @@ fn read_config_file(app: tauri::AppHandle, rel_path: String) -> Result<String, S
 }
 
 #[tauri::command]
-fn read_bepinex_cfg(app: tauri::AppHandle, rel_path: String) -> Result<bepinex_cfg::FileData, String> {
+fn read_bepinex_cfg(
+    app: tauri::AppHandle,
+    rel_path: String,
+) -> Result<bepinex_cfg::FileData, String> {
     let base = shared_config_dir(&app)?;
     let rel = std::path::Path::new(&rel_path);
     if !is_safe_rel_path(rel) {
@@ -725,6 +802,7 @@ fn write_config_file(app: tauri::AppHandle, args: WriteConfigArgs) -> Result<boo
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(GameState::default())
         .manage(downloader::DepotLoginState::default())
         .setup(|app| {

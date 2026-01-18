@@ -23,7 +23,6 @@ pub struct TaskProgressPayload {
     pub total_files: Option<u64>,
 }
 
-
 #[derive(Debug, Clone, Serialize)]
 pub struct TaskUpdatableProgressPayload {
     pub total: u64,
@@ -56,14 +55,13 @@ pub fn emit_error(app: &AppHandle, payload: TaskErrorPayload) {
     let _ = app.emit("download://error", payload);
 }
 
-
 pub fn emit_updatable_progress(app: &AppHandle, payload: TaskUpdatableProgressPayload) {
     let _ = app.emit("updatable://progress", payload);
 }
 
 pub fn emit_updatable_finished(app: &AppHandle, payload: TaskFinishedPayload) {
     let _ = app.emit("updatable://finished", payload);
-} 
+}
 
 pub fn emit_updatable_error(app: &AppHandle, payload: TaskFinishedPayload) {
     let _ = app.emit("updatable://error", payload);

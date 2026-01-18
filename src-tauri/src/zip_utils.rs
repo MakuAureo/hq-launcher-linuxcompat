@@ -3,7 +3,10 @@ use std::fs::File;
 use std::path::{Path, PathBuf};
 use zip::ZipArchive;
 
-fn strip_prefix_components<'a>(comps: &'a [std::path::Component<'a>], prefix: &[&str]) -> Option<usize> {
+fn strip_prefix_components<'a>(
+    comps: &'a [std::path::Component<'a>],
+    prefix: &[&str],
+) -> Option<usize> {
     if comps.len() < prefix.len() {
         return None;
     }
@@ -40,7 +43,11 @@ where
         // Prevent Zip Slip (path traversal). Skip unsafe paths.
         let Some(safe_rel) = entry.enclosed_name().map(|p| p.to_owned()) else {
             extracted = extracted.saturating_add(1);
-            on_progress(extracted, total_files, Some("Skipped unsafe path".to_string()));
+            on_progress(
+                extracted,
+                total_files,
+                Some("Skipped unsafe path".to_string()),
+            );
             continue;
         };
 
@@ -99,7 +106,11 @@ where
 
         let Some(safe_rel) = entry.enclosed_name().map(|p| p.to_owned()) else {
             processed = processed.saturating_add(1);
-            on_progress(processed, total_entries, Some("Skipped unsafe path".to_string()));
+            on_progress(
+                processed,
+                total_entries,
+                Some("Skipped unsafe path".to_string()),
+            );
             continue;
         };
 
@@ -131,7 +142,11 @@ where
         // Add-only: do not overwrite existing config files.
         if out_path.exists() {
             processed = processed.saturating_add(1);
-            on_progress(processed, total_entries, Some("Skipped existing file".to_string()));
+            on_progress(
+                processed,
+                total_entries,
+                Some("Skipped existing file".to_string()),
+            );
             continue;
         }
 
@@ -180,7 +195,11 @@ where
 
         let Some(safe_rel) = entry.enclosed_name().map(|p| p.to_owned()) else {
             processed = processed.saturating_add(1);
-            on_progress(processed, total_entries, Some("Skipped unsafe path".to_string()));
+            on_progress(
+                processed,
+                total_entries,
+                Some("Skipped unsafe path".to_string()),
+            );
             continue;
         };
 
@@ -245,10 +264,13 @@ where
 
     let base_dir = plugins_dir.join(folder_name);
     let _ = std::fs::remove_dir_all(&base_dir).map_err(|e| e.to_string());
-    
+
     std::fs::create_dir_all(&base_dir).map_err(|e| e.to_string())?;
 
-    log::info!("Extracting Thunderstore mod zip into: {}", base_dir.to_string_lossy());
+    log::info!(
+        "Extracting Thunderstore mod zip into: {}",
+        base_dir.to_string_lossy()
+    );
 
     for i in 0..archive.len() {
         let mut entry = archive.by_index(i).map_err(|e| e.to_string())?;
@@ -257,7 +279,11 @@ where
         let Some(safe_rel) = entry.enclosed_name().map(|p| p.to_owned()) else {
             log::error!("Skipped unsafe path: {}", entry.name());
             processed = processed.saturating_add(1);
-            on_progress(processed, total_entries, Some("Skipped unsafe path".to_string()));
+            on_progress(
+                processed,
+                total_entries,
+                Some("Skipped unsafe path".to_string()),
+            );
             continue;
         };
 
@@ -311,7 +337,11 @@ where
         // Add-only: do not overwrite existing plugin files.
         if out_path.exists() {
             processed = processed.saturating_add(1);
-            on_progress(processed, total_entries, Some("Skipped existing file".to_string()));
+            on_progress(
+                processed,
+                total_entries,
+                Some("Skipped existing file".to_string()),
+            );
             continue;
         }
 
@@ -328,4 +358,3 @@ where
 
     Ok(())
 }
-

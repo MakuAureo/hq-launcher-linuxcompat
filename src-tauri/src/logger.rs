@@ -2,13 +2,11 @@ use std::path::PathBuf;
 
 use log::LevelFilter;
 use log4rs::{
-    append::{
-        rolling_file::{
-            policy::compound::{
-                roll::fixed_window::FixedWindowRoller, trigger::size::SizeTrigger, CompoundPolicy,
-            },
-            RollingFileAppender,
+    append::rolling_file::{
+        policy::compound::{
+            roll::fixed_window::FixedWindowRoller, trigger::size::SizeTrigger, CompoundPolicy,
         },
+        RollingFileAppender,
     },
     config::{Appender, Config, Root},
     encode::pattern::PatternEncoder,
@@ -51,7 +49,10 @@ pub fn init(app: &tauri::AppHandle) -> Result<(), AnyError> {
             5,
         )
         .map_err(|e| err(e.to_string()))?;
-    let policy = CompoundPolicy::new(Box::new(SizeTrigger::new(10 * 1024 * 1024)), Box::new(roller));
+    let policy = CompoundPolicy::new(
+        Box::new(SizeTrigger::new(10 * 1024 * 1024)),
+        Box::new(roller),
+    );
 
     let file_appender = RollingFileAppender::builder()
         .encoder(Box::new(PatternEncoder::new(
@@ -101,4 +102,3 @@ pub fn init(app: &tauri::AppHandle) -> Result<(), AnyError> {
     log::info!("log file: {}", log_file.to_string_lossy());
     Ok(())
 }
-

@@ -1,5 +1,5 @@
-use std::{io::BufRead, path::Path};
 use std::ops::Range;
+use std::{io::BufRead, path::Path};
 
 use serde::{Deserialize, Serialize};
 
@@ -47,8 +47,14 @@ pub enum Value {
     String(String),
     Int(Num<i32>),
     Float(Num<f32>),
-    Enum { index: usize, options: Vec<String> },
-    Flags { indicies: Vec<usize>, options: Vec<String> },
+    Enum {
+        index: usize,
+        options: Vec<String>,
+    },
+    Flags {
+        indicies: Vec<usize>,
+        options: Vec<String>,
+    },
 }
 
 #[derive(Debug, Default)]
@@ -64,20 +70,11 @@ struct EntryBuilder {
 }
 
 fn parse_num_i32(value: &str, range: Option<&(String, String)>) -> Result<Num<i32>, String> {
-    let value: i32 = value
-        .trim()
-        .parse::<i32>()
-        .map_err(|e| e.to_string())?;
+    let value: i32 = value.trim().parse::<i32>().map_err(|e| e.to_string())?;
     let range = match range {
         Some((min, max)) => {
-            let min: i32 = min
-                .trim()
-                .parse::<i32>()
-                .map_err(|e| e.to_string())?;
-            let max: i32 = max
-                .trim()
-                .parse::<i32>()
-                .map_err(|e| e.to_string())?;
+            let min: i32 = min.trim().parse::<i32>().map_err(|e| e.to_string())?;
+            let max: i32 = max.trim().parse::<i32>().map_err(|e| e.to_string())?;
             Some(min..max)
         }
         None => None,
@@ -136,9 +133,9 @@ impl EntryBuilder {
         let name = self.name.ok_or("No entry name".to_string())?;
         let value_raw = self.value.unwrap_or_else(|| "".to_string());
 
-        let type_name = self.type_name.unwrap_or_else(|| {
-            check_value_type(&value_raw)
-        });
+        let type_name = self
+            .type_name
+            .unwrap_or_else(|| check_value_type(&value_raw));
 
         let default = match self.default_value {
             Some(v) => Some(Self::parse_value(
@@ -208,10 +205,7 @@ impl EntryBuilder {
     ) -> Result<SimpleValue, String> {
         match type_name {
             "Boolean" => Ok(SimpleValue::Bool(
-                value
-                    .trim()
-                    .parse::<bool>()
-                    .map_err(|e| e.to_string())?,
+                value.trim().parse::<bool>().map_err(|e| e.to_string())?,
             )),
             "String" => Ok(SimpleValue::String(value.replace(r"\n", "\n"))),
             "Int32" | "Number" => Ok(SimpleValue::Int(parse_num_i32(&value, range)?)),
@@ -220,7 +214,6 @@ impl EntryBuilder {
         }
     }
 }
-
 
 // {
 //     "name": "WebSocketSharp_netstandard",
@@ -275,8 +268,14 @@ enum SimpleValue {
 
 #[derive(Debug, Clone)]
 enum EnumLikeValue {
-    Enum { index: usize, options: Vec<String> },
-    Flags { indicies: Vec<usize>, options: Vec<String> },
+    Enum {
+        index: usize,
+        options: Vec<String>,
+    },
+    Flags {
+        indicies: Vec<usize>,
+        options: Vec<String>,
+    },
 }
 
 fn parsed_to_value(v: ParsedValue) -> Value {
@@ -318,7 +317,11 @@ fn value_to_string(v: &Value) -> String {
     }
 }
 
-fn render_entry_comments(entry: &Entry, type_name: &str, options: Option<&[String]>) -> Vec<String> {
+fn render_entry_comments(
+    entry: &Entry,
+    type_name: &str,
+    options: Option<&[String]>,
+) -> Vec<String> {
     let mut out: Vec<String> = vec![];
     if let Some(desc) = &entry.description {
         for line in desc.lines() {
@@ -539,11 +542,14 @@ pub fn write(file: &FileData) -> Result<String, String> {
             let type_name = infer_type_name(entry);
             let comments = render_entry_comments(entry, &type_name, value_options(entry));
             out.extend(comments);
-            out.push(format!("{} = {}", entry.name, value_to_string(&entry.value)));
+            out.push(format!(
+                "{} = {}",
+                entry.name,
+                value_to_string(&entry.value)
+            ));
             out.push(String::new());
         }
     }
 
     Ok(out.join("\n"))
 }
-

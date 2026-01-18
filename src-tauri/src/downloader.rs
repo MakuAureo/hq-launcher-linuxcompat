@@ -1,18 +1,18 @@
-use std::path::PathBuf;
-use std::process::Stdio;
-use tokio::process::Command;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::sync::mpsc;
-use std::time::{Duration, Instant};
-use serde::{Deserialize, Serialize};
-use tauri::Manager;
-use tauri::Emitter;
+use expectrl::{ControlCode, Regex, Session};
 use log::info;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::path::PathBuf;
+use std::process::Command as StdCommand;
+use std::process::Stdio;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
-use expectrl::{ControlCode, Regex, Session};
-use std::process::Command as StdCommand;
+use std::time::{Duration, Instant};
+use tauri::Emitter;
+use tauri::Manager;
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::process::Command;
+use tokio::sync::mpsc;
 
 fn strip_ansi(s: &str) -> String {
     // Minimal ANSI stripper for log display.
@@ -92,7 +92,8 @@ fn looks_like_twofactor_needed(text: &str) -> bool {
         || l.contains("two-factor")
         || l.contains("two factor")
         || l.contains("2fa")
-        || (l.contains("auth") && (l.contains("code") || l.contains("steam") || l.contains("guard")))
+        || (l.contains("auth")
+            && (l.contains("code") || l.contains("steam") || l.contains("guard")))
         || (l.contains("enter") && l.contains("code"))
         || l.contains("authentication code")
         || l.contains("security code")
@@ -135,9 +136,17 @@ pub struct LoginState {
 #[serde(tag = "type", content = "data")]
 pub enum DepotDownloaderEvent {
     Output(String),
-    Progress { current: u64, total: u64 },
-    NeedsTwoFactor { session_id: u64, message: Option<String> },
-    NeedsMobileConfirmation { session_id: u64 },
+    Progress {
+        current: u64,
+        total: u64,
+    },
+    NeedsTwoFactor {
+        session_id: u64,
+        message: Option<String>,
+    },
+    NeedsMobileConfirmation {
+        session_id: u64,
+    },
     LoginSuccess,
     LoginFailed(String),
     DownloadComplete,
@@ -163,18 +172,20 @@ impl DepotDownloader {
     const PATCH_MARKER: &'static str = ".hq_launcher_ipc";
 
     pub fn new(app: &tauri::AppHandle) -> Result<Self, String> {
-        let app_data = app.path().app_data_dir()
+        let app_data = app
+            .path()
+            .app_data_dir()
             .map_err(|e| format!("failed to resolve app data dir: {e}"))?;
-        
+
         let downloader_dir = app_data.join("downloader");
         let ipc_mode = downloader_dir.join(Self::PATCH_MARKER).exists();
-        
+
         #[cfg(target_os = "windows")]
         let executable_path = downloader_dir.join("DepotDownloader.exe");
-        
+
         #[cfg(not(target_os = "windows"))]
         let executable_path = downloader_dir.join("DepotDownloader");
-        
+
         if !executable_path.exists() {
             return Err("DepotDownloader not installed. Please install it first.".to_string());
         }
@@ -521,16 +532,20 @@ impl DepotDownloader {
             .arg(credentials.password.clone())
             .arg("-remember-password");
 
-        let mut p = Session::spawn(cmd).map_err(|_| "Failed to start DepotDownloader".to_string())?;
+        let mut p =
+            Session::spawn(cmd).map_err(|_| "Failed to start DepotDownloader".to_string())?;
         // Use non-blocking `check()` loop instead of blocking `expect()` to ensure we keep
         // draining submitted codes and never hang on reads.
 
         // If user pre-provided a code, hold it; otherwise wait for submit.
-        let mut pending_code: Option<String> = two_factor_code
-            .and_then(|c| {
-                let t = c.trim().to_string();
-                if t.is_empty() { None } else { Some(t) }
-            });
+        let mut pending_code: Option<String> = two_factor_code.and_then(|c| {
+            let t = c.trim().to_string();
+            if t.is_empty() {
+                None
+            } else {
+                Some(t)
+            }
+        });
 
         let start = Instant::now();
         let mut last_output_at = Instant::now();
@@ -552,7 +567,9 @@ impl DepotDownloader {
 
             // If we already have a code, try sending it (idempotent).
             if let Some(code) = pending_code.take() {
-                self.emit_event(DepotDownloaderEvent::Output("Submitting Steam Guard code...".to_string()));
+                self.emit_event(DepotDownloaderEvent::Output(
+                    "Submitting Steam Guard code...".to_string(),
+                ));
                 if let Err(e) = p.send_line(&code) {
                     let _ = p.send(ControlCode::EndOfText);
                     return Err(format!("Failed to send code to DepotDownloader: {e}"));
@@ -585,22 +602,30 @@ impl DepotDownloader {
                         }
 
                         // Mobile confirmation
-                        if (l.contains("confirm") && l.contains("sign in")) || l.contains("steam mobile app") {
+                        if (l.contains("confirm") && l.contains("sign in"))
+                            || l.contains("steam mobile app")
+                        {
                             if !saw_mobile_confirm {
                                 saw_mobile_confirm = true;
-                                self.emit_event(DepotDownloaderEvent::NeedsMobileConfirmation { session_id });
+                                self.emit_event(DepotDownloaderEvent::NeedsMobileConfirmation {
+                                    session_id,
+                                });
                             }
                         }
 
                         // 2FA / auth detection (more aggressive)
                         if looks_like_twofactor_needed(&l)
-                            || (start.elapsed() < Duration::from_secs(45) && (l.contains("auth") || l.contains("authentication")))
+                            || (start.elapsed() < Duration::from_secs(45)
+                                && (l.contains("auth") || l.contains("authentication")))
                         {
                             if !requested_2fa {
                                 requested_2fa = true;
                                 self.emit_event(DepotDownloaderEvent::NeedsTwoFactor {
                                     session_id,
-                                    message: Some("Steam Guard code required. Enter code then submit.".to_string()),
+                                    message: Some(
+                                        "Steam Guard code required. Enter code then submit."
+                                            .to_string(),
+                                    ),
                                 });
                             }
                         }
@@ -690,10 +715,9 @@ impl DepotDownloader {
         if !login_state.is_logged_in {
             return Err("Not logged in. Please login first.".to_string());
         }
-        let username = login_state
-            .username
-            .clone()
-            .ok_or_else(|| "Missing username for remembered login. Please login again.".to_string())?;
+        let username = login_state.username.clone().ok_or_else(|| {
+            "Missing username for remembered login. Please login again.".to_string()
+        })?;
 
         std::fs::create_dir_all(&output_dir).map_err(|e| e.to_string())?;
 
@@ -717,7 +741,6 @@ impl DepotDownloader {
             args.push("-manifest".to_string());
             args.push(manifest);
         }
-
 
         let mut child = Command::new(&self.executable_path)
             .args(&args)
@@ -825,10 +848,9 @@ impl DepotDownloader {
         if !login_state.is_logged_in {
             return Err("Not logged in. Please login first.".to_string());
         }
-        let username = login_state
-            .username
-            .clone()
-            .ok_or_else(|| "Missing username for remembered login. Please login again.".to_string())?;
+        let username = login_state.username.clone().ok_or_else(|| {
+            "Missing username for remembered login. Please login again.".to_string()
+        })?;
 
         std::fs::create_dir_all(&output_dir).map_err(|e| e.to_string())?;
 
@@ -953,7 +975,7 @@ impl DepotDownloader {
             username: None,
         };
         self.save_login_state(&state)?;
-        
+
         // 저장된 인증 정보 삭제
         let config_files = ["config.vdf", ".DepotDownloader"];
         for filename in &config_files {
@@ -962,7 +984,7 @@ impl DepotDownloader {
                 let _ = std::fs::remove_file(path);
             }
         }
-        
+
         // ssfn* 패턴 파일들 삭제
         if let Ok(entries) = std::fs::read_dir(&self.config_dir) {
             for entry in entries.flatten() {
@@ -973,7 +995,7 @@ impl DepotDownloader {
                 }
             }
         }
-        
+
         log::info!("Logged out successfully");
         Ok(())
     }
@@ -995,11 +1017,17 @@ impl DepotDownloader {
         // Also mirror to backend logs to help debugging when UI misses events.
         match &event {
             DepotDownloaderEvent::Output(s) => {
-                let preview = if s.len() > 500 { format!("{}…", &s[..500]) } else { s.clone() };
+                let preview = if s.len() > 500 {
+                    format!("{}…", &s[..500])
+                } else {
+                    s.clone()
+                };
                 log::info!("DepotDownloader: {}", preview.replace('\n', "\\n"));
             }
             DepotDownloaderEvent::Error(e) => log::error!("DepotDownloader error: {e}"),
-            DepotDownloaderEvent::LoginFailed(e) => log::error!("DepotDownloader login failed: {e}"),
+            DepotDownloaderEvent::LoginFailed(e) => {
+                log::error!("DepotDownloader login failed: {e}")
+            }
             _ => {}
         }
         let _ = self.app.emit("depot-downloader", event);
@@ -1040,16 +1068,22 @@ fn write_saved_login_state(app: &tauri::AppHandle, state: &LoginState) -> Result
     Ok(())
 }
 
-
 pub async fn install_downloader(app: &tauri::AppHandle) -> Result<bool, String> {
     let download_url = format!("https://github.com/SteamRE/DepotDownloader/releases/download/DepotDownloader_3.4.0/{DEPOT_DOWNLOADER_NAME}.zip");
 
-    let install_path = app.path().app_data_dir().map_err(|e| format!("failed to resolve app data dir: {e}"))?.join("downloader");
+    let install_path = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("failed to resolve app data dir: {e}"))?
+        .join("downloader");
     let marker_path = install_path.join(DepotDownloader::PATCH_MARKER);
-    
+
     // If patched build already installed, skip.
     if install_path.exists() && marker_path.exists() {
-        info!("Patched DepotDownloader already installed at {}", install_path.display());
+        info!(
+            "Patched DepotDownloader already installed at {}",
+            install_path.display()
+        );
         return Ok(true);
     }
 
@@ -1064,7 +1098,10 @@ pub async fn install_downloader(app: &tauri::AppHandle) -> Result<bool, String> 
             .map(|p| p.to_path_buf());
 
         if let Some(root) = repo_root {
-            let src = root.join(".depotdownloader").join("DepotDownloader").join("DepotDownloader.csproj");
+            let src = root
+                .join(".depotdownloader")
+                .join("DepotDownloader")
+                .join("DepotDownloader.csproj");
             if src.exists() {
                 info!("Building patched DepotDownloader from {}", src.display());
                 std::fs::create_dir_all(&install_path).map_err(|e| e.to_string())?;
@@ -1104,16 +1141,22 @@ pub async fn install_downloader(app: &tauri::AppHandle) -> Result<bool, String> 
                 .map_err(|e| e.to_string())??;
 
                 std::fs::write(&marker_path, b"ipc").map_err(|e| e.to_string())?;
-                info!("Patched DepotDownloader installed at {}", install_path.display());
+                info!(
+                    "Patched DepotDownloader installed at {}",
+                    install_path.display()
+                );
                 return Ok(true);
             }
         }
     }
 
-    info!("Downloading DepotDownloader from {download_url} to {}", install_path.display());
+    info!(
+        "Downloading DepotDownloader from {download_url} to {}",
+        install_path.display()
+    );
 
     std::fs::create_dir_all(&install_path).map_err(|e| e.to_string())?;
-    
+
     let client = reqwest::Client::new();
     let response = client
         .get(&download_url)
@@ -1133,11 +1176,11 @@ pub async fn install_downloader(app: &tauri::AppHandle) -> Result<bool, String> 
     // ZIP 압축 해제 (blocking IO)
     let zip_path_clone = zip_path.clone();
     let install_path_clone = install_path.clone();
-    
+
     tauri::async_runtime::spawn_blocking(move || -> Result<(), String> {
         let file = std::fs::File::open(&zip_path_clone).map_err(|e| e.to_string())?;
         let mut archive = zip::ZipArchive::new(file).map_err(|e| e.to_string())?;
-        
+
         for i in 0..archive.len() {
             let mut file = archive.by_index(i).map_err(|e| e.to_string())?;
             let outpath = match file.enclosed_name() {
@@ -1170,14 +1213,14 @@ pub async fn install_downloader(app: &tauri::AppHandle) -> Result<bool, String> 
 
         // ZIP 파일 삭제
         std::fs::remove_file(&zip_path_clone).map_err(|e| e.to_string())?;
-        
+
         Ok(())
     })
     .await
     .map_err(|e| e.to_string())??;
 
     info!("DepotDownloader installed successfully");
-    
+
     Ok(true)
 }
 
@@ -1321,7 +1364,10 @@ pub fn depot_login_submit_code(
         .get(&session_id)
         .ok_or_else(|| "login session not found (expired?)".to_string())?;
     // Do not log the code itself; only acknowledge receipt.
-    log::info!("Steam Guard code received for session_id={session_id} (len={})", code.len());
+    log::info!(
+        "Steam Guard code received for session_id={session_id} (len={})",
+        code.len()
+    );
     tx.send(code)
         .map_err(|_| "failed to send code to login session".to_string())?;
     Ok(true)
@@ -1333,10 +1379,9 @@ pub async fn depot_download(
     output_dir: String,
 ) -> Result<(), String> {
     let downloader = DepotDownloader::new(&app)?;
-    downloader.download_depot(
-        manifest_id,
-        PathBuf::from(output_dir),
-    ).await
+    downloader
+        .download_depot(manifest_id, PathBuf::from(output_dir))
+        .await
 }
 
 #[tauri::command]
@@ -1387,8 +1432,7 @@ pub async fn depot_download_files(
     output_dir: String,
 ) -> Result<(), String> {
     let downloader = DepotDownloader::new(&app)?;
-    downloader.download_files(
-        files,
-        PathBuf::from(output_dir),
-    ).await
+    downloader
+        .download_files(files, PathBuf::from(output_dir))
+        .await
 }

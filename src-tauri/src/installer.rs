@@ -6,12 +6,12 @@ use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use tauri::Manager;
 
-use crate::mods;
+use crate::downloader;
 use crate::mod_config::ModsConfig;
+use crate::mods;
 use crate::progress::{self, TaskErrorPayload, TaskFinishedPayload, TaskProgressPayload};
 use crate::zip_utils;
-use crate::downloader;
-use progress::{emit_progress, emit_finished, emit_error};
+use progress::{emit_error, emit_finished, emit_progress};
 
 // BepInEx installation via Thunderstore BepInExPack (Mono, preconfigured).
 // We download the Thunderstore package zip and extract the contents of the `BepInExPack/` folder
@@ -21,7 +21,6 @@ use progress::{emit_progress, emit_finished, emit_error};
 const BEPINEXPACK_VERSION: &str = "5.4.2304";
 const BEPINEXPACK_URL: &str =
     "https://thunderstore.io/package/download/BepInEx/BepInExPack/5.4.2304/";
-
 
 fn overall_from_step(step: u32, step_progress: f64, steps_total: u32) -> f64 {
     let s = step.max(1).min(steps_total) as f64;
@@ -46,7 +45,9 @@ fn manifest_state_path(app: &tauri::AppHandle) -> Result<std::path::PathBuf, Str
 fn read_manifest_state(app: &tauri::AppHandle) -> Result<ManifestState, String> {
     let path = manifest_state_path(app)?;
     if !path.exists() {
-        return Ok(ManifestState { manifest_version: 0 });
+        return Ok(ManifestState {
+            manifest_version: 0,
+        });
     }
     let text = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
     serde_json::from_str(&text).map_err(|e| e.to_string())
@@ -220,7 +221,7 @@ fn ensure_config_junction(app: &tauri::AppHandle, game_root: &Path) -> Result<Pa
 /// This is called on app startup to ensure config files exist.
 pub async fn ensure_default_config(app: tauri::AppHandle) -> Result<(), String> {
     let shared_config = shared_config_dir(&app)?;
-    
+
     // Check if config directory exists and has files (other than BepInEx.cfg which is auto-generated)
     let needs_download = if !shared_config.exists() {
         true
@@ -253,25 +254,28 @@ pub async fn ensure_default_config(app: tauri::AppHandle) -> Result<(), String> 
     let client = reqwest::Client::new();
     let config_zip_url = "https://f.asta.rs/hq-launcher/default_config.zip";
     log::info!("Downloading config from {}", config_zip_url);
-    
+
     let response = client
         .get(config_zip_url)
         .header("User-Agent", "hq-launcher/0.1 (tauri)")
         .send()
         .await
         .map_err(|e| format!("Failed to download config: {e}"))?;
-    
+
     if !response.status().is_success() {
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
-        return Err(format!("Config download failed with status {}: {}", status, body));
+        return Err(format!(
+            "Config download failed with status {}: {}",
+            status, body
+        ));
     }
-    
+
     let cfg_bytes = response
         .bytes()
         .await
         .map_err(|e| format!("Failed to read config response: {e}"))?;
-    
+
     log::info!("Downloaded {} bytes of config", cfg_bytes.len());
 
     // Create temporary directory for extraction
@@ -281,7 +285,7 @@ pub async fn ensure_default_config(app: tauri::AppHandle) -> Result<(), String> 
         .map_err(|e| format!("failed to resolve app data dir: {e}"))?
         .join("temp");
     std::fs::create_dir_all(&temp_dir).map_err(|e| e.to_string())?;
-    
+
     let cfg_zip_path = temp_dir.join("default_config.zip");
     std::fs::write(&cfg_zip_path, &cfg_bytes).map_err(|e| e.to_string())?;
 
@@ -291,7 +295,7 @@ pub async fn ensure_default_config(app: tauri::AppHandle) -> Result<(), String> 
     // Extract config (add-only, won't overwrite existing files)
     let cfg_zip_path2 = cfg_zip_path.clone();
     let config_dir2 = shared_config.clone();
-    
+
     tauri::async_runtime::spawn_blocking(move || -> Result<(), String> {
         zip_utils::extract_config_zip_into_bepinex_config_with_progress(
             &cfg_zip_path2,
@@ -335,7 +339,6 @@ pub async fn sync_latest_install_from_manifest(app: tauri::AppHandle) -> Result<
     // One-step sync: mods only (config is handled separately on app startup).
     const STEPS_TOTAL: u32 = 1;
     let sync_res: Result<(), String> = async {
-
         // Step 1: mods
         progress::emit_progress(
             &app,
@@ -354,30 +357,35 @@ pub async fn sync_latest_install_from_manifest(app: tauri::AppHandle) -> Result<
             },
         );
 
-        mods::install_mods_with_progress(&game_root, game_version, &mods_cfg, |done, total, detail| {
-            let step_progress = if total == 0 {
-                1.0
-            } else {
-                (done as f64 / total as f64).clamp(0.0, 1.0)
-            };
+        mods::install_mods_with_progress(
+            &game_root,
+            game_version,
+            &mods_cfg,
+            |done, total, detail| {
+                let step_progress = if total == 0 {
+                    1.0
+                } else {
+                    (done as f64 / total as f64).clamp(0.0, 1.0)
+                };
 
-            progress::emit_progress(
-                &app,
-                TaskProgressPayload {
-                    version: game_version,
-                    steps_total: STEPS_TOTAL,
-                    step: 1,
-                    step_name: "Sync Mods".to_string(),
-                    step_progress,
-                    overall_percent: overall_from_step(1, step_progress, STEPS_TOTAL),
-                    detail,
-                    downloaded_bytes: None,
-                    total_bytes: None,
-                    extracted_files: Some(done),
-                    total_files: Some(total),
-                },
-            );
-        })
+                progress::emit_progress(
+                    &app,
+                    TaskProgressPayload {
+                        version: game_version,
+                        steps_total: STEPS_TOTAL,
+                        step: 1,
+                        step_name: "Sync Mods".to_string(),
+                        step_progress,
+                        overall_percent: overall_from_step(1, step_progress, STEPS_TOTAL),
+                        detail,
+                        downloaded_bytes: None,
+                        total_bytes: None,
+                        extracted_files: Some(done),
+                        total_files: Some(total),
+                    },
+                );
+            },
+        )
         .await?;
 
         // Mark sync as complete for the UI.
@@ -474,7 +482,7 @@ pub async fn download_and_setup(app: tauri::AppHandle, version: u32) -> Result<b
 
         let downloader = downloader::DepotDownloader::new(&app)?;
         let login_state = downloader.get_login_state();
-        
+
         if !login_state.is_logged_in {
             return Err("Not logged in to Steam. Please login first.".to_string());
         }
@@ -488,7 +496,10 @@ pub async fn download_and_setup(app: tauri::AppHandle, version: u32) -> Result<b
                 step_name: "Login Check".to_string(),
                 step_progress: 1.0,
                 overall_percent: overall_from_step(1, 1.0, STEPS_TOTAL),
-                detail: Some(format!("Logged in as {}", login_state.username.unwrap_or_default())),
+                detail: Some(format!(
+                    "Logged in as {}",
+                    login_state.username.unwrap_or_default()
+                )),
                 downloaded_bytes: None,
                 total_bytes: None,
                 extracted_files: None,
@@ -525,16 +536,14 @@ pub async fn download_and_setup(app: tauri::AppHandle, version: u32) -> Result<b
 
         log::info!("Downloading Lethal Company to {}", extract_dir.display());
 
-        let manifest_id = manifests
-            .get(&version)
-            .cloned()
-            .ok_or_else(|| format!("No depot manifest id for game version {version} in remote manifest."))?;
+        let manifest_id = manifests.get(&version).cloned().ok_or_else(|| {
+            format!("No depot manifest id for game version {version} in remote manifest.")
+        })?;
 
         // 게임 다운로드
-        downloader.download_depot(
-            Some(manifest_id),
-            extract_dir.clone(),
-        ).await?;
+        downloader
+            .download_depot(Some(manifest_id), extract_dir.clone())
+            .await?;
 
         emit_progress(
             &app,
@@ -605,7 +614,13 @@ pub async fn download_and_setup(app: tauri::AppHandle, version: u32) -> Result<b
             downloaded = downloaded.saturating_add(chunk.len() as u64);
 
             let step_progress = total
-                .map(|t| if t == 0 { 0.0 } else { (downloaded as f64 / t as f64).clamp(0.0, 1.0) })
+                .map(|t| {
+                    if t == 0 {
+                        0.0
+                    } else {
+                        (downloaded as f64 / t as f64).clamp(0.0, 1.0)
+                    }
+                })
                 .unwrap_or(0.0);
 
             emit_progress(
@@ -638,7 +653,10 @@ pub async fn download_and_setup(app: tauri::AppHandle, version: u32) -> Result<b
             let n = f.read(&mut header).map_err(|e| e.to_string())?;
             if n < 2 || header[0] != b'P' || header[1] != b'K' {
                 let _ = std::fs::remove_file(&zip_path);
-                return Err("BepInExPack download is not a valid zip (got non-zip response). Please retry.".to_string());
+                return Err(
+                    "BepInExPack download is not a valid zip (got non-zip response). Please retry."
+                        .to_string(),
+                );
             }
         }
 
@@ -761,29 +779,34 @@ pub async fn download_and_setup(app: tauri::AppHandle, version: u32) -> Result<b
         let plugins_dir = mods::plugins_dir(&extract_dir);
         std::fs::create_dir_all(&plugins_dir).map_err(|e| e.to_string())?;
 
-        mods::install_mods_with_progress(&extract_dir, version, &mods_cfg, |done, total, detail| {
-            let step_progress = if total == 0 {
-                1.0
-            } else {
-                (done as f64 / total as f64).clamp(0.0, 1.0)
-            };
-            emit_progress(
-                &app,
-                TaskProgressPayload {
-                    version,
-                    steps_total: STEPS_TOTAL,
-                    step: 5,
-                    step_name: "Install Mods".to_string(),
-                    step_progress,
-                    overall_percent: overall_from_step(5, step_progress, STEPS_TOTAL),
-                    detail,
-                    downloaded_bytes: None,
-                    total_bytes: None,
-                    extracted_files: Some(done),
-                    total_files: Some(total),
-                },
-            );
-        })
+        mods::install_mods_with_progress(
+            &extract_dir,
+            version,
+            &mods_cfg,
+            |done, total, detail| {
+                let step_progress = if total == 0 {
+                    1.0
+                } else {
+                    (done as f64 / total as f64).clamp(0.0, 1.0)
+                };
+                emit_progress(
+                    &app,
+                    TaskProgressPayload {
+                        version,
+                        steps_total: STEPS_TOTAL,
+                        step: 5,
+                        step_name: "Install Mods".to_string(),
+                        step_progress,
+                        overall_percent: overall_from_step(5, step_progress, STEPS_TOTAL),
+                        detail,
+                        downloaded_bytes: None,
+                        total_bytes: None,
+                        extracted_files: Some(done),
+                        total_files: Some(total),
+                    },
+                );
+            },
+        )
         .await?;
 
         emit_progress(
