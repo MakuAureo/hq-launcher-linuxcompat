@@ -74,7 +74,16 @@ jobs:
         if: matrix.platform == 'ubuntu-latest'
         run: |
           sudo apt update
-          xargs sudo apt install -y < environment/apt_packages.txt
+          sudo apt install -y \
+            libwebkit2gtk-4.1-dev \
+            build-essential \
+            curl \
+            wget \
+            file \
+            libssl-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev
 
       - name: Install frontend dependencies
         run: yarn install
