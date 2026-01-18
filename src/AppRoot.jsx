@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import LauncherPage from "./pages/LauncherPage";
 import { LoginDialog } from "./components/auth/LoginDialog";
+import { UpdateDialog } from "./components/UpdateDialog";
 
 function Splash({ message }) {
   return (
@@ -23,6 +24,9 @@ export default function AppRoot() {
   const [bootstrapError, setBootstrapError] = useState("");
   const [loginOpen, setLoginOpen] = useState(false);
   const loginResolveRef = useRef(null);
+  const [updateInfo, setUpdateInfo] = useState(null);
+  const [updateDialogOpen, setUpdateDialogOpen] = useState(false);
+  const updateCheckedRef = useRef(false);
 
   async function refreshLoginState() {
     try {
@@ -45,6 +49,25 @@ export default function AppRoot() {
 
   useEffect(() => {
     refreshLoginState();
+  }, []);
+
+  // Check for updates on app startup
+  useEffect(() => {
+    if (updateCheckedRef.current) return;
+    updateCheckedRef.current = true;
+
+    (async () => {
+      try {
+        const info = await invoke("check_app_update");
+        if (info?.available) {
+          setUpdateInfo(info);
+          setUpdateDialogOpen(true);
+        }
+      } catch (e) {
+        console.error("Failed to check for updates:", e);
+        // Silently ignore update check failures to avoid disrupting user experience
+      }
+    })();
   }, []);
 
   function requestLogin() {
@@ -88,6 +111,12 @@ export default function AppRoot() {
             if (loginResolveRef.current) loginResolveRef.current(true);
             loginResolveRef.current = null;
           }}
+        />
+
+        <UpdateDialog
+          open={updateDialogOpen}
+          onOpenChange={setUpdateDialogOpen}
+          updateInfo={updateInfo}
         />
       </div>
     </div>
