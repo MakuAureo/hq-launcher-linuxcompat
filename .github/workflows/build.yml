@@ -4,9 +4,10 @@ on:
   push:
     tags:
       - 'v*'
-    branches:
-      - '*'
   workflow_dispatch:
+
+permissions:
+  contents: write
 
 env:
   APP_NAME: "Sample Desktop App"
@@ -14,6 +15,9 @@ env:
 jobs:
   changelog:
     runs-on: ubuntu-latest
+    outputs:
+      changelog: ${{ steps.build_changelog.outputs.changelog }}
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -21,14 +25,17 @@ jobs:
       - name: Build changelog
         id: build_changelog
         run: |
-          PREV_TAG=$(git tag --list v* | tail -n2 | head -n1)
-          echo "changelog=$(git log $PREV_TAG...${{ github.ref_name }} --pretty=format:"- %s")" >> $GITHUB_OUTPUT
-
-    outputs:
-      changelog: ${{ steps.build_changelog.outputs.changelog }}
+          PREV_TAG=$(git tag --list "v*" --sort=-creatordate | sed -n '2p')
+          if [ -z "$PREV_TAG" ]; then
+            echo "changelog=Initial release" >> $GITHUB_OUTPUT
+          else
+            echo "changelog<<EOF" >> $GITHUB_OUTPUT
+            git log "$PREV_TAG"...${{ github.ref_name }} --pretty=format:"- %s" >> $GITHUB_OUTPUT
+            echo "EOF" >> $GITHUB_OUTPUT
+          fi
 
   release:
-    needs: [changelog]
+    needs: changelog
     runs-on: ${{ matrix.platform }}
 
     strategy:
@@ -44,26 +51,24 @@ jobs:
           - platform: windows-latest
             args: ''
 
-    # ✅ 빌드 전에 env 주입 (중요)
     env:
       CI: true
       TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
       TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 'lts/*'
-          cache: 'yarn'
+          cache: yarn
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
 
       - name: Rust cache
         uses: swatinem/rust-cache@v2
@@ -86,25 +91,13 @@ jobs:
             librsvg2-dev
 
       - name: Install frontend dependencies
-        run: yarn install
+        run: yarn install --frozen-lockfile
 
-      # =========================
-      # 🔹 BRANCH CI (tauri ❌)
-      # =========================
-      - name: Frontend Build (branch only)
-        if: ${{ github.ref_type == 'branch' }}
-        run: yarn build
-
-      # =========================
-      # 🔹 TAG RELEASE (tauri ✅)
-      # =========================
       - name: Debug signing key (safe)
-        if: ${{ github.ref_type == 'tag' }}
         run: |
           echo "TAURI KEY LENGTH: ${#TAURI_SIGNING_PRIVATE_KEY}"
 
       - name: Build & Release Tauri App
-        if: ${{ github.ref_type == 'tag' }}
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
