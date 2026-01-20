@@ -301,12 +301,18 @@ export default function LauncherPage({
       unlistenCheckUpdateProgress = await listen(
         "updatable://progress",
         (event) => {
-          let overall_percent =
-            (event.payload.checked / event.payload.total) * 100;
+        console.log("updatable://progress", event.payload)
+          const total = Number(event.payload?.total ?? 0);
+          const checked = Number(event.payload?.checked ?? 0);
+          const overall_percent =
+            total > 0 && Number.isFinite(total) && Number.isFinite(checked)
+              ? (checked / total) * 100
+              : 0;
           setCheckUpdateTask((t) => ({
             ...t,
             status: "working",
             ...event.payload,
+            version: event.payload?.version ?? t.version,
             overall_percent: overall_percent,
             error: null,
           }));
@@ -441,6 +447,10 @@ export default function LauncherPage({
       status: "working",
       version: v,
       overall_percent: 0,
+      detail: null,
+      updatable_mods: [],
+      checked: 0,
+      total: 0,
       error: null,
     }));
     try {
@@ -730,37 +740,32 @@ export default function LauncherPage({
             />
           </div>
 
-          {checkUpdateTask.updatable_mods.length > 0 && (
-            <Button
-              variant="secondary"
-              className="h-11"
-              onClick={() => {
-                const sameVersion = checkUpdateTask.version === selectedVersion;
-                const alreadyChecked =
-                  sameVersion && checkUpdateTask.status === "done";
-                const isChecking =
-                  sameVersion && checkUpdateTask.status === "working";
+          {checkUpdateTask.updatable_mods.length > 0 && <Button
+            variant="secondary"
+            className="h-11"
+            onClick={() => {
+              const sameVersion = checkUpdateTask.version === selectedVersion;
+              const alreadyChecked = sameVersion && checkUpdateTask.status === "done";
+              const isChecking = sameVersion && checkUpdateTask.status === "working";
 
-                // Don't re-check if we already have results for this version.
-                // If it's currently checking, just open the modal to show progress.
-                if (!alreadyChecked && !isChecking)
-                  checkModUpdates(selectedVersion);
-                setCheckUpdatePrompt({ open: true, mods: filteredMods });
-              }}
-              title="Check mod updates"
-            >
-              <span className="relative inline-flex">
-                <Download className="h-4 w-4" />
-                {checkUpdateTask.status === "done" &&
-                checkUpdateTask.version === selectedVersion &&
-                (checkUpdateTask.updatable_mods?.length ?? 0) > 0 ? (
-                  <span className="absolute -right-2 -top-2 rounded-full bg-amber-400 px-1.5 py-0.5 text-[10px] font-bold text-black">
-                    {checkUpdateTask.updatable_mods.length}
-                  </span>
-                ) : null}
-              </span>
-            </Button>
-          )}
+              // Don't re-check if we already have results for this version.
+              // If it's currently checking, just open the modal to show progress.
+              if (!alreadyChecked && !isChecking) checkModUpdates(selectedVersion);
+              setCheckUpdatePrompt({ open: true, mods: filteredMods });
+            }}
+            title="Check mod updates"
+          >
+            <span className="relative inline-flex">
+              <Download className="h-4 w-4" />
+              {checkUpdateTask.status === "done" &&
+              checkUpdateTask.version === selectedVersion &&
+              (checkUpdateTask.updatable_mods?.length ?? 0) > 0 ? (
+                <span className="absolute -right-2 -top-2 rounded-full bg-amber-400 px-1.5 py-0.5 text-[10px] font-bold text-black">
+                  {checkUpdateTask.updatable_mods.length}
+                </span>
+              ) : null}
+            </span>
+          </Button>}
           {loginState?.username != null && <div className="ml-2 flex items-center gap-2">
             {loginState?.username ? (
               <div className="hidden items-center gap-2 md:flex">
@@ -1411,9 +1416,10 @@ export default function LauncherPage({
                     <Button
                       variant="default"
                       className="h-10 min-w-[120px]"
+                      disabled={(checkUpdateTask.updatable_mods?.length ?? 0) === 0}
                       onClick={() => {
                         setCheckUpdatePrompt({ open: false, mods: [] });
-                        runModUpdate(selectedVersion);
+                        runModUpdate(checkUpdateTask.version ?? selectedVersion);
                       }}
                     >
                       Update

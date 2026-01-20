@@ -134,14 +134,43 @@ fn thunderstore_cache_path(app: &tauri::AppHandle) -> Result<std::path::PathBuf,
 
 fn read_disablemod(app: &tauri::AppHandle) -> Result<DisableModFile, String> {
     let path = disablemod_path(app)?;
+    let default_mod = normalize_mod_id("SlushyRH", "FreeeeeeMoooooons");
     if !path.exists() {
-        return Ok(DisableModFile {
-            version: 1,
-            mods: vec![],
-        });
+        // v2 (migration): include default disabled mod entry.
+        let f = DisableModFile {
+            version: 2,
+            mods: vec![default_mod],
+        };
+        // best-effort persist so frontend sees stable state
+        let _ = write_disablemod(app, &f);
+        return Ok(f);
     }
     let text = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
-    serde_json::from_str(&text).map_err(|e| e.to_string())
+    let mut f = match serde_json::from_str::<DisableModFile>(&text) {
+        Ok(v) => v,
+        Err(e) => {
+            // If the file is corrupted, recover with defaults rather than breaking the UI.
+            log::warn!("Failed to parse disablemod.json, resetting: {e}");
+            let f = DisableModFile {
+                version: 2,
+                mods: vec![default_mod],
+            };
+            let _ = write_disablemod(app, &f);
+            return Ok(f);
+        }
+    };
+
+    // Migration: v1 -> v2
+    if f.version == 1 {
+        f.version = 2;
+        f.mods.push(default_mod);
+        f.mods
+            .sort_by(|a, b| a.dev.cmp(&b.dev).then(a.name.cmp(&b.name)));
+        f.mods.dedup();
+        let _ = write_disablemod(app, &f);
+    }
+
+    Ok(f)
 }
 
 fn write_disablemod(app: &tauri::AppHandle, f: &DisableModFile) -> Result<(), String> {
@@ -276,7 +305,7 @@ async fn check_mod_updates(app: tauri::AppHandle, version: u32) -> Result<bool, 
 
     let mut updatable_mods: Vec<String> = vec![];
 
-    mods::updatable_mods_with_progress(
+    let res = mods::updatable_mods_with_progress(
         &extract_dir,
         version,
         &mods_cfg,
@@ -290,6 +319,7 @@ async fn check_mod_updates(app: tauri::AppHandle, version: u32) -> Result<bool, 
             progress::emit_updatable_progress(
                 &app,
                 TaskUpdatableProgressPayload {
+                    version,
                     total,
                     checked,
                     updatable_mods: updatable_mods.clone(),
@@ -298,7 +328,18 @@ async fn check_mod_updates(app: tauri::AppHandle, version: u32) -> Result<bool, 
             );
         },
     )
-    .await?;
+    .await;
+
+    if let Err(e) = res {
+        progress::emit_updatable_error(
+            &app,
+            TaskErrorPayload {
+                version,
+                message: e.clone(),
+            },
+        );
+        return Err(e);
+    }
 
     progress::emit_updatable_finished(
         &app,

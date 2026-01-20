@@ -25,6 +25,7 @@ pub struct TaskProgressPayload {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct TaskUpdatableProgressPayload {
+    pub version: u32,
     pub total: u64,
     pub checked: u64,
     pub updatable_mods: Vec<String>,
@@ -63,6 +64,6 @@ pub fn emit_updatable_finished(app: &AppHandle, payload: TaskFinishedPayload) {
     let _ = app.emit("updatable://finished", payload);
 }
 
-pub fn emit_updatable_error(app: &AppHandle, payload: TaskFinishedPayload) {
+pub fn emit_updatable_error(app: &AppHandle, payload: TaskErrorPayload) {
     let _ = app.emit("updatable://error", payload);
 }

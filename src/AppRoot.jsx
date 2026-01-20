@@ -86,7 +86,7 @@ export default function AppRoot() {
   }
 
   return (
-    <div className="h-full w-full">
+    <div className="h-full w-full overflow-hidden">
       <Titlebar className="fixed top-0 left-0 h-8" />
       <div className="relative h-[calc(100vh-32px)] w-full mt-8">
         {loginState.status === "loading" ? (

@@ -15,3 +15,7 @@
 - HOTFIX: Bug where submission does not work after entering 2FA
 - Fixed the issue where progress was not applied when downloading a game
 - Fixed 2FA code not showing when input is not required
+
+## 1.0.8 (2026-01-21)
+- Fixed a bug in the check logic related to mode updates and omissions.
+- Fixed a scrolling bug in the UI.

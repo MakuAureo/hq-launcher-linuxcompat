@@ -340,7 +340,21 @@ where
         let mod_label = format!("{}-{}", spec.dev, spec.name);
         if already_dir.exists() {
             let path = target_plugins.join(format!("{}-{}/manifest.json", spec.dev, spec.name));
-            let manifest = read_manifest(&path)?;
+            let manifest = match read_manifest(&path) {
+                Ok(m) => m,
+                Err(e) => {
+                    // Don't fail the entire check if one plugin has a broken/edited manifest.
+                    // Treat it as "unknown version" so the user can still see other updates.
+                    log::warn!("Failed to read {mod_label} manifest.json: {e}");
+                    on_progress(
+                        idx,
+                        total_mods,
+                        Some(format!("{mod_label}: failed to read manifest ({e})")),
+                        None,
+                    );
+                    continue;
+                }
+            };
 
             // Use the SAME pinning semantics as install/update:
             // - If pinned_version_for(game_version) exists: compare against that pinned version.
@@ -366,30 +380,47 @@ where
                 continue;
             }
 
-            if manifest.version_number == desired_version {
-                log::info!("{} is already the latest version", mod_label.clone());
-                on_progress(
-                    idx,
-                    total_mods,
-                    Some(format!(
-                        "{} is already the latest version",
-                        mod_label.clone()
-                    )),
-                    None,
-                );
-            } else {
-                log::info!(
-                    "{} mod can update ({} -> {})",
-                    mod_label.clone(),
-                    manifest.version_number,
-                    desired_version
-                );
-                on_progress(
-                    idx,
-                    total_mods,
-                    Some(format!("{} mod can update", mod_label.clone())),
-                    Some(mod_label.clone()),
-                );
+            match cmp_version_str(&manifest.version_number, &desired_version) {
+                Ordering::Equal => {
+                    log::info!("{} is already the latest version", mod_label.clone());
+                    on_progress(
+                        idx,
+                        total_mods,
+                        Some(format!(
+                            "{} is already the latest version",
+                            mod_label.clone()
+                        )),
+                        None,
+                    );
+                }
+                Ordering::Less => {
+                    log::info!(
+                        "{} mod can update ({} -> {})",
+                        mod_label.clone(),
+                        manifest.version_number,
+                        desired_version
+                    );
+                    on_progress(
+                        idx,
+                        total_mods,
+                        Some(format!("{} mod can update", mod_label.clone())),
+                        Some(mod_label.clone()),
+                    );
+                }
+                Ordering::Greater => {
+                    log::info!(
+                        "{} is newer than desired ({} > {})",
+                        mod_label.clone(),
+                        manifest.version_number,
+                        desired_version
+                    );
+                    on_progress(
+                        idx,
+                        total_mods,
+                        Some(format!("{} is newer than desired", mod_label.clone())),
+                        None,
+                    );
+                }
             }
         } else {
             // Plugin folder doesn't exist, but mod is in remote manifest - mark as updatable (installable)
@@ -429,6 +460,7 @@ where
     Ok(())
 }
 
+
 pub async fn update_mods_with_progress<F>(
     game_root: &Path,
     game_version: u32,
@@ -464,7 +496,7 @@ where
     let mut installed: u64 = 0;
     on_progress(0, total_mods, Some("Starting...".to_string()));
 
-    for (idx, spec) in cfg.mods.iter().enumerate() {
+    for (_idx, spec) in cfg.mods.iter().enumerate() {
         // Add-only: if a plugin folder already exists for this mod, skip it.
         // Folder name is deterministic (does not include the mod version).
 

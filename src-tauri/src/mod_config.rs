@@ -89,9 +89,9 @@ impl ModsConfig {
     pub async fn fetch_manifest(
         client: &reqwest::Client,
     ) -> Result<(u32, Self, Vec<Vec<String>>, BTreeMap<u32, String>), String> {
+        // Use stable manifest only.
         let url = "https://f.asta.rs/hq-launcher/manifest.json";
         log::info!("Fetching manifest from {url}");
-
         let manifest = client
             .get(url)
             .send()
