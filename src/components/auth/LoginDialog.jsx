@@ -39,7 +39,7 @@ export function LoginDialog({ open, onLoggedIn }) {
         if (p.type === "NeedsMobileConfirmation") {
           if (p.data?.session_id != null)
             setSessionId(Number(p.data.session_id));
-          setError("Steam 앱에서 로그인 승인을 완료한 뒤 다시 시도해주세요.");
+          setError("Please complete the login approval in the Steam app and try again.");
           return;
         }
         if (p.type === "LoginSuccess") {
@@ -81,7 +81,7 @@ export function LoginDialog({ open, onLoggedIn }) {
             const next = [...prev, line].slice(-60);
             if (line.includes("Connecting to Steam")) {
               setNeeds2fa(true);
-              setSessionId(null);
+              setSessionId(1);
             }
             if (line.includes("STEAM GUARD")) {
               setError(
@@ -162,9 +162,9 @@ export function LoginDialog({ open, onLoggedIn }) {
       >
         <div className="flex flex-col gap-4">
           <div>
-            <div className="text-lg font-semibold">Steam 로그인</div>
+            <div className="text-lg font-semibold">Steam Login</div>
             <div className="mt-1 text-sm text-white/55">
-              DepotDownloader로 Steam 파일을 받기 전에 로그인이 필요합니다.
+            You must log in before downloading Steam files with DepotDownloader.
             </div>
           </div>
 
@@ -265,8 +265,7 @@ export function LoginDialog({ open, onLoggedIn }) {
           </div>
 
           <div className="text-[11px] text-white/40">
-            로그인 정보는 DepotDownloader가 생성하는 파일과 앱의 로그인 상태
-            파일로 로컬에 저장됩니다.
+            Your login information is stored locally in the files created by DepotDownloader and the app's login state file.
           </div>
         </div>
       </DialogContent>
