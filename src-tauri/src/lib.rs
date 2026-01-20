@@ -942,6 +942,7 @@ async fn get_global_shortcut(app: tauri::AppHandle, shortcut: String) -> Result<
     Ok(shortcut)
 }
 
+#[tauri::command]
 #[cfg(target_os = "macos")]
 async fn get_global_shortcut(app: tauri::AppHandle, shortcut: String) -> Result<String, String> {
     let shortcut = shortcut.replace("CommandOrControl", "Cmd");
