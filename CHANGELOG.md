@@ -10,3 +10,8 @@
 ## 1.0.6 (2026-01-20)
 - Fixed the issue where progress was not applied when downloading a game
 - Fixed 2FA code not showing when input is not required
+
+## 1.0.7 (2026-01-20)
+- HOTFIX: Bug where submission does not work after entering 2FA
+- Fixed the issue where progress was not applied when downloading a game
+- Fixed 2FA code not showing when input is not required
