@@ -252,6 +252,17 @@ async fn sync_latest_install_from_manifest(app: tauri::AppHandle) -> Result<bool
 }
 
 #[tauri::command]
+async fn open_version_folder(app: tauri::AppHandle) -> Result<bool, String> {
+    let dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("failed to resolve app data dir: {e}"))?
+        .join("versions");
+    let _ = opener::open(dir).map_err(|e| e.to_string())?;
+    Ok(true)
+}
+
+#[tauri::command]
 async fn check_mod_updates(app: tauri::AppHandle, version: u32) -> Result<bool, String> {
     let client = reqwest::Client::new();
 
@@ -833,11 +844,11 @@ async fn check_app_update(app: tauri::AppHandle) -> Result<UpdateInfo, String> {
     use semver::Version;
 
     let current_version_str = app.package_info().version.to_string();
-    
+
     // GitHub Releases API에서 최신 릴리즈 가져오기
     let client = reqwest::Client::new();
     let github_release_url = "https://api.github.com/repos/p-asta/hq-launcher/releases/latest";
-    
+
     let github_release: GitHubRelease = client
         .get(github_release_url)
         .header("User-Agent", "hq-launcher-updater")
@@ -903,7 +914,12 @@ async fn download_app_update(app: tauri::AppHandle) -> Result<bool, String> {
                 downloaded += chunk_length as u64;
                 if let Some(total) = content_length {
                     let percent = (downloaded as f64 / total as f64) * 100.0;
-                    log::debug!("Update download progress: {:.2}% ({}/{} bytes)", percent, downloaded, total);
+                    log::debug!(
+                        "Update download progress: {:.2}% ({}/{} bytes)",
+                        percent,
+                        downloaded,
+                        total
+                    );
                 } else {
                     log::debug!("Update download progress: {} bytes downloaded", downloaded);
                 }
@@ -916,6 +932,20 @@ async fn download_app_update(app: tauri::AppHandle) -> Result<bool, String> {
         .map_err(|e| format!("Failed to download update: {e}"))?;
 
     Ok(true)
+}
+
+
+#[tauri::command]
+#[cfg(not(target_os = "macos"))]
+async fn get_global_shortcut(app: tauri::AppHandle, shortcut: String) -> Result<String, String> {
+    let shortcut = shortcut.replace("CommandOrControl", "Ctrl");
+    Ok(shortcut)
+}
+
+#[cfg(target_os = "macos")]
+async fn get_global_shortcut(app: tauri::AppHandle, shortcut: String) -> Result<String, String> {
+    let shortcut = shortcut.replace("CommandOrControl", "Cmd");
+    Ok(shortcut)
 }
 
 #[tauri::command]
@@ -944,7 +974,12 @@ async fn install_app_update(app: tauri::AppHandle) -> Result<bool, String> {
                 downloaded += chunk_length as u64;
                 if let Some(total) = content_length {
                     let percent = (downloaded as f64 / total as f64) * 100.0;
-                    log::debug!("Update download progress: {:.2}% ({}/{} bytes)", percent, downloaded, total);
+                    log::debug!(
+                        "Update download progress: {:.2}% ({}/{} bytes)",
+                        percent,
+                        downloaded,
+                        total
+                    );
                 } else {
                     log::debug!("Update download progress: {} bytes downloaded", downloaded);
                 }
@@ -967,6 +1002,7 @@ fn get_app_version(app: tauri::AppHandle) -> Result<String, String> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(GameState::default())
         .manage(downloader::DepotLoginState::default())
@@ -1015,6 +1051,8 @@ pub fn run() {
             download_app_update,
             install_app_update,
             get_app_version,
+            open_version_folder,
+            get_global_shortcut
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

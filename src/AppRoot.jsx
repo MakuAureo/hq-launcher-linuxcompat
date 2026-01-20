@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import LauncherPage from "./pages/LauncherPage";
 import { LoginDialog } from "./components/auth/LoginDialog";
 import { UpdateDialog } from "./components/UpdateDialog";
+import Titlebar from "./Titlebar";
 
 function Splash({ message }) {
   return (
@@ -86,8 +87,8 @@ export default function AppRoot() {
 
   return (
     <div className="h-full w-full">
-      <div className="absolute inset-0 bg-[#0b0d12]" />
-      <div className="relative h-full w-full">
+      <Titlebar className="fixed top-0 left-0 h-8" />
+      <div className="relative h-[calc(100vh-32px)] w-full mt-8">
         {loginState.status === "loading" ? (
           <Splash message="Starting up..." />
         ) : (
