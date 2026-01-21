@@ -962,6 +962,34 @@ export default function LauncherPage({
     task.status === "error" &&
     task.version === promptVersion;
 
+  const [downloadCancelBusy, setDownloadCancelBusy] = useState(false);
+
+  function resetTaskForVersion(v) {
+    if (typeof v !== "number") return;
+    setTask((t) => {
+      if (t.version !== v) return t;
+      return {
+        status: "idle",
+        version: null,
+        step_name: null,
+        steps_total: null,
+        step: null,
+        overall_percent: null,
+        detail: null,
+        downloaded_bytes: null,
+        total_bytes: null,
+        error: null,
+      };
+    });
+  }
+
+  function closeDownloadPrompt() {
+    const v = downloadPrompt.version;
+    setDownloadPrompt({ open: false, version: null });
+    setDownloadCancelBusy(false);
+    resetTaskForVersion(v);
+  }
+
   const updateIsWorking = updatePrompt.open && task.status === "working";
   const updateIsDone = updatePrompt.open && task.status === "done";
   const updateIsError = updatePrompt.open && task.status === "error";
@@ -1611,8 +1639,7 @@ export default function LauncherPage({
           <button
             className="absolute inset-0 bg-black/60"
             onClick={() => {
-              if (!promptIsWorking)
-                setDownloadPrompt({ open: false, version: null });
+              if (!promptIsWorking) closeDownloadPrompt();
             }}
             aria-label="Close"
           />
@@ -1671,41 +1698,66 @@ export default function LauncherPage({
 
             <div className="mt-5 flex items-center justify-end gap-2">
               {promptIsWorking ? (
-                <Button
-                  variant="default"
-                  disabled
-                  className="h-10 min-w-[120px]"
-                >
-                  <Download className="h-4 w-4" />
-                  Downloading...
-                </Button>
+                <>
+                  <Button
+                    variant="secondary"
+                    className="h-10"
+                    disabled={downloadCancelBusy}
+                    onClick={async () => {
+                      if (typeof promptVersion !== "number") return;
+                      setDownloadCancelBusy(true);
+                      try {
+                        await invoke("cancel_download", { version: promptVersion });
+                      } catch (e) {
+                        // Best-effort; backend will emit an error if cancel fails.
+                        console.error(e);
+                      } finally {
+                        setDownloadCancelBusy(false);
+                      }
+                    }}
+                  >
+                    Cancel
+                  </Button>
+                  <Button
+                    variant="default"
+                    disabled
+                    className="h-10 min-w-[120px]"
+                  >
+                    <Download className="h-4 w-4" />
+                    Downloading...
+                  </Button>
+                </>
               ) : promptIsDone ? (
                 <Button
                   variant="default"
                   className="h-10 min-w-[120px]"
-                  onClick={() =>
-                    setDownloadPrompt({ open: false, version: null })
-                  }
+                  onClick={closeDownloadPrompt}
                 >
                   Close
                 </Button>
               ) : promptIsError ? (
-                <Button
-                  variant="default"
-                  className="h-10 min-w-[120px]"
-                  onClick={() =>
-                    setDownloadPrompt({ open: false, version: null })
-                  }
-                >
-                  Close
-                </Button>
+                <>
+                  <Button variant="secondary" className="h-10" onClick={closeDownloadPrompt}>
+                    Close
+                  </Button>
+                  <Button
+                    variant="default"
+                    className="h-10 min-w-[120px]"
+                    onClick={() => {
+                      if (typeof promptVersion !== "number") return;
+                      setSelectedVersion(promptVersion);
+                      downloadVersion(promptVersion);
+                    }}
+                    disabled={typeof promptVersion !== "number"}
+                  >
+                    Retry
+                  </Button>
+                </>
               ) : (
                 <>
                   <Button
                     variant="secondary"
-                    onClick={() =>
-                      setDownloadPrompt({ open: false, version: null })
-                    }
+                    onClick={closeDownloadPrompt}
                     className="h-10"
                   >
                     Cancel

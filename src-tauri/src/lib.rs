@@ -10,6 +10,8 @@ mod zip_utils;
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::sync::Mutex;
 use tauri::{Manager, State};
 
@@ -271,6 +273,16 @@ struct GameState {
     child: Mutex<Option<std::process::Child>>,
 }
 
+#[derive(Default)]
+struct DownloadState {
+    active: Mutex<Option<ActiveDownload>>,
+}
+
+struct ActiveDownload {
+    version: u32,
+    cancel: Arc<AtomicBool>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 struct GameStatus {
     running: bool,
@@ -278,8 +290,76 @@ struct GameStatus {
 }
 
 #[tauri::command]
-async fn download(app: tauri::AppHandle, version: u32) -> Result<bool, String> {
-    installer::download_and_setup(app, version).await
+async fn download(
+    app: tauri::AppHandle,
+    version: u32,
+    state: State<'_, DownloadState>,
+) -> Result<bool, String> {
+    // Only allow one active download at a time (simplifies cancel + UI state).
+    let cancel = Arc::new(AtomicBool::new(false));
+    {
+        let mut guard = state
+            .active
+            .lock()
+            .map_err(|_| "download state lock poisoned".to_string())?;
+        if let Some(active) = guard.as_ref() {
+            if !active.cancel.load(Ordering::Relaxed) {
+                return Err(format!(
+                    "download already in progress (v{}). Please cancel it first.",
+                    active.version
+                ));
+            }
+        }
+        *guard = Some(ActiveDownload {
+            version,
+            cancel: cancel.clone(),
+        });
+    }
+
+    let res = installer::download_and_setup(app.clone(), version, cancel.clone()).await;
+
+    // Clear active download state (best-effort).
+    {
+        let mut guard = state
+            .active
+            .lock()
+            .map_err(|_| "download state lock poisoned".to_string())?;
+        if guard.as_ref().is_some_and(|a| a.version == version) {
+            *guard = None;
+        }
+    }
+    res
+}
+
+#[tauri::command]
+fn cancel_download(
+    app: tauri::AppHandle,
+    version: u32,
+    state: State<'_, DownloadState>,
+) -> Result<bool, String> {
+    let mut did_signal = false;
+    {
+        let guard = state
+            .active
+            .lock()
+            .map_err(|_| "download state lock poisoned".to_string())?;
+        if let Some(active) = guard.as_ref() {
+            if active.version == version {
+                active.cancel.store(true, Ordering::Relaxed);
+                did_signal = true;
+            }
+        }
+    }
+
+    // Best-effort cleanup: delete the partial version folder.
+    // If files are still in use, the installer will retry cleanup on exit.
+    if did_signal {
+        if let Ok(dir) = version_dir(&app, version) {
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+    }
+
+    Ok(did_signal)
 }
 
 #[tauri::command]
@@ -1120,6 +1200,7 @@ pub fn run() {
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(GameState::default())
+        .manage(DownloadState::default())
         .manage(downloader::DepotLoginState::default())
         .setup(|app| {
             // File logging (AppDataDir/logs/hq-launcher.log)
@@ -1138,6 +1219,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
             download,
+            cancel_download,
             sync_latest_install_from_manifest,
             check_mod_updates,
             apply_mod_updates,

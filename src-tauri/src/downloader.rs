@@ -6,6 +6,7 @@ use std::path::PathBuf;
 use std::process::Command as StdCommand;
 use std::process::Stdio;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use tauri::Emitter;
@@ -727,6 +728,7 @@ impl DepotDownloader {
         manifest_id: Option<String>,
         output_dir: PathBuf,
         task: Option<DownloadTaskContext>,
+        cancel: Option<Arc<std::sync::atomic::AtomicBool>>,
     ) -> Result<(), String> {
         let login_state = self.get_login_state();
         if !login_state.is_logged_in {
@@ -800,6 +802,11 @@ impl DepotDownloader {
             tokio::select! {
                 s = child.wait() => break s.map_err(|e| e.to_string())?,
                 _ = idle_ticks.tick() => {
+                    if cancel.as_ref().is_some_and(|c| c.load(Ordering::Relaxed)) {
+                        let _ = child.kill().await;
+                        let _ = child.wait().await;
+                        return Err("Cancelled".to_string());
+                    }
                     if last_output_at.elapsed() > Duration::from_secs(15) {
                         // After progress has started, DepotDownloader may go quiet for a while
                         // (large files, disk I/O). Only fail if it stays silent for a long time.
@@ -820,6 +827,11 @@ impl DepotDownloader {
                 }
                 msg = rx.recv() => {
                     let Some((is_stderr, line)) = msg else { continue; };
+                    if cancel.as_ref().is_some_and(|c| c.load(Ordering::Relaxed)) {
+                        let _ = child.kill().await;
+                        let _ = child.wait().await;
+                        return Err("Cancelled".to_string());
+                    }
                     last_output_at = Instant::now();
                     let l = line.to_lowercase();
                     let auth_prompt =
@@ -1483,7 +1495,7 @@ pub async fn depot_download(
 ) -> Result<(), String> {
     let downloader = DepotDownloader::new(&app)?;
     downloader
-        .download_depot(manifest_id, PathBuf::from(output_dir), None)
+        .download_depot(manifest_id, PathBuf::from(output_dir), None, None)
         .await
 }
 

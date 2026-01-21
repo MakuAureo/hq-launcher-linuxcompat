@@ -1,6 +1,8 @@
 use std::fs::File;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
@@ -442,7 +444,19 @@ pub async fn sync_latest_install_from_manifest(app: tauri::AppHandle) -> Result<
     }
 }
 
-pub async fn download_and_setup(app: tauri::AppHandle, version: u32) -> Result<bool, String> {
+pub async fn download_and_setup(
+    app: tauri::AppHandle,
+    version: u32,
+    cancel: Arc<AtomicBool>,
+) -> Result<bool, String> {
+    let dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("failed to resolve app data dir: {e}"))?
+        .join("versions");
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let extract_dir = dir.join(format!("v{version}"));
+
     let res: Result<bool, String> = async {
         // DepotDownloader 설치 확인
         if let Err(e) = downloader::install_downloader(&app).await {
@@ -450,15 +464,9 @@ pub async fn download_and_setup(app: tauri::AppHandle, version: u32) -> Result<b
         }
 
         let client = reqwest::Client::new();
-
-        let dir = app
-            .path()
-            .app_data_dir()
-            .map_err(|e| format!("failed to resolve app data dir: {e}"))?
-            .join("versions");
-        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-
-        let extract_dir = dir.join(format!("v{version}"));
+        if cancel.load(Ordering::Relaxed) {
+            return Err("Cancelled".to_string());
+        }
 
         // Download -> Extract Game -> Install BepInEx -> Install Config -> Install Mods
         const STEPS_TOTAL: u32 = 5;
@@ -530,6 +538,10 @@ pub async fn download_and_setup(app: tauri::AppHandle, version: u32) -> Result<b
             },
         );
 
+        if cancel.load(Ordering::Relaxed) {
+            return Err("Cancelled".to_string());
+        }
+
         if extract_dir.exists() {
             std::fs::remove_dir_all(&extract_dir).map_err(|e| e.to_string())?;
         }
@@ -552,6 +564,7 @@ pub async fn download_and_setup(app: tauri::AppHandle, version: u32) -> Result<b
                     step: 2,
                     step_name: "Download Game".to_string(),
                 }),
+                Some(cancel.clone()),
             )
             .await?;
 
@@ -619,6 +632,10 @@ pub async fn download_and_setup(app: tauri::AppHandle, version: u32) -> Result<b
         let mut downloaded: u64 = 0;
         let mut stream = response.bytes_stream();
         while let Some(chunk) = stream.next().await {
+            if cancel.load(Ordering::Relaxed) {
+                let _ = std::fs::remove_file(&zip_path);
+                return Err("Cancelled".to_string());
+            }
             let chunk = chunk.map_err(|e| e.to_string())?;
             file.write_all(&chunk).map_err(|e| e.to_string())?;
             downloaded = downloaded.saturating_add(chunk.len() as u64);
@@ -677,11 +694,16 @@ pub async fn download_and_setup(app: tauri::AppHandle, version: u32) -> Result<b
         let zip_path_clone = zip_path.clone();
         let extract_dir_clone = extract_dir.clone();
         let app_clone = app.clone();
+        let cancel_clone = cancel.clone();
         tauri::async_runtime::spawn_blocking(move || -> Result<(), String> {
             zip_utils::extract_thunderstore_package_with_progress(
                 &zip_path_clone,
                 &extract_dir_clone,
                 |done, total, detail| {
+                    if cancel_clone.load(Ordering::Relaxed) {
+                        // Stop extraction early (best-effort) when cancelled.
+                        return;
+                    }
                     let step_progress = if total == 0 {
                         1.0
                     } else {
@@ -711,6 +733,10 @@ pub async fn download_and_setup(app: tauri::AppHandle, version: u32) -> Result<b
         })
         .await
         .map_err(|e| e.to_string())??;
+
+        if cancel.load(Ordering::Relaxed) {
+            return Err("Cancelled".to_string());
+        }
 
         emit_progress(
             &app,
@@ -789,6 +815,10 @@ pub async fn download_and_setup(app: tauri::AppHandle, version: u32) -> Result<b
         let plugins_dir = mods::plugins_dir(&extract_dir);
         std::fs::create_dir_all(&plugins_dir).map_err(|e| e.to_string())?;
 
+        if cancel.load(Ordering::Relaxed) {
+            return Err("Cancelled".to_string());
+        }
+
         mods::install_mods_with_progress(
             &app,
             &extract_dir,
@@ -851,6 +881,9 @@ pub async fn download_and_setup(app: tauri::AppHandle, version: u32) -> Result<b
     .await;
 
     if let Err(message) = &res {
+        if message == "Cancelled" {
+            let _ = std::fs::remove_dir_all(&extract_dir);
+        }
         emit_error(
             &app,
             TaskErrorPayload {
