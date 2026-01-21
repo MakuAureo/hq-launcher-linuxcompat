@@ -12,6 +12,7 @@ import {
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Checkbox } from "../components/ui/checkbox";
+import { Switch } from "../components/ui/switch";
 import { Slider } from "../components/ui/slider";
 import {
   Select,
@@ -83,7 +84,11 @@ export default function LauncherPage({
   const [selectedMod, setSelectedMod] = useState(null);
   const [modEnabled, setModEnabled] = useState(true);
   const [modToggleBusy, setModToggleBusy] = useState(false);
+  const [modToggleBusyKeys, setModToggleBusyKeys] = useState(() => new Set());
   const [disabledMods, setDisabledMods] = useState([]); // [{dev,name}] normalized by backend
+  const [installedModVersionsByVersion, setInstalledModVersionsByVersion] =
+    useState({}); // version -> { key(dev::name lower) -> version }
+  const [modCfgFilesByKey, setModCfgFilesByKey] = useState({}); // key(dev::name lower) -> ["foo.cfg", ...]
 
   // Download confirm modal (for non-installed versions)
   const [downloadPrompt, setDownloadPrompt] = useState({
@@ -141,15 +146,203 @@ export default function LauncherPage({
     return (v) => s.has(v);
   }, [installedVersions]);
 
+  const installedModVersions = useMemo(() => {
+    const v = Number(selectedVersion);
+    if (!Number.isFinite(v)) return {};
+    const byV = installedModVersionsByVersion?.[v];
+    return byV && typeof byV === "object" ? byV : {};
+  }, [installedModVersionsByVersion, selectedVersion]);
+
   const filteredMods = useMemo(() => {
     const q = query.trim().toLowerCase();
     const mods = Array.isArray(manifest.mods) ? manifest.mods : [];
-    if (!q) return mods;
-    return mods.filter((m) => {
+
+    const selectedKeyLower = selectedMod
+      ? `${String(selectedMod.dev).toLowerCase()}::${String(
+          selectedMod.name
+        ).toLowerCase()}`
+      : null;
+
+    const chainConfigs = Array.isArray(manifest.chain_config)
+      ? manifest.chain_config
+      : [];
+
+    const canonicalChainId = (paths) =>
+      (Array.isArray(paths) ? paths : []).slice().sort().join("|");
+
+    const chainIdForMod = (m) => {
+      const devLower = String(m?.dev ?? "").toLowerCase();
+      const nameLower = String(m?.name ?? "").toLowerCase();
+      const keyLower = `${devLower}::${nameLower}`;
+
+      // Prefer confirmed mapping (from backend list_config_files_for_mod)
+      const cfgs = modCfgFilesByKey[keyLower];
+      if (Array.isArray(cfgs) && cfgs.length > 0) {
+        for (const cfgPath of cfgs) {
+          const chain = chainConfigs.find((paths) => paths.includes(cfgPath));
+          if (Array.isArray(chain) && chain.length > 0) return canonicalChainId(chain);
+        }
+      }
+
+      // Fallback: best-effort inference by substring match against chain paths
+      // (same heuristic the backend uses for list_config_files_for_mod filtering).
+      for (const chain of chainConfigs) {
+        if (!Array.isArray(chain) || chain.length === 0) continue;
+        const hit = chain.some((p) => {
+          const lp = String(p ?? "").toLowerCase();
+          if (!lp.endsWith(".cfg")) return false;
+          return (devLower && lp.includes(devLower)) || (nameLower && lp.includes(nameLower));
+        });
+        if (hit) return canonicalChainId(chain);
+      }
+      return null;
+    };
+
+    const matchesQuery = (m) => {
+      // Preserve existing special-case exclusion
+      if (String(m?.name ?? "") === "ShipLootCruiser") return false;
+      if (!q) return true;
       const hay = `${m.dev} ${m.name}`.toLowerCase();
-      return hay.includes(q) && m.name !== "ShipLootCruiser";
-    });
-  }, [manifest.mods, query]);
+      return hay.includes(q);
+    };
+
+    // 1) Build chain groups using ALL mods (so search can match any member,
+    // but representative can still prefer an installed member even if it doesn't match the query).
+    const groups = new Map(); // chainId -> [mods]
+    const noChain = [];
+    for (const m of mods) {
+      const id = chainIdForMod(m);
+      if (!id) {
+        noChain.push(m);
+        continue;
+      }
+      const arr = groups.get(id) ?? [];
+      arr.push(m);
+      groups.set(id, arr);
+    }
+
+    // 2) Choose representatives per group (prefer selected, then installed for this version)
+    const repsByChainId = new Map();
+    for (const [id, list] of groups.entries()) {
+      if (selectedKeyLower) {
+        const selectedInGroup = list.find((m) => {
+          const k = `${String(m.dev).toLowerCase()}::${String(m.name).toLowerCase()}`;
+          return k === selectedKeyLower;
+        });
+        if (selectedInGroup) {
+          repsByChainId.set(id, selectedInGroup);
+          continue;
+        }
+      }
+
+      // Prefer installed mods as the representative when showing chained groups.
+      const installedInGroup = list.find((m) => {
+        const k = `${String(m.dev).toLowerCase()}::${String(m.name).toLowerCase()}`;
+        return !!installedModVersions[k];
+      });
+      if (installedInGroup) {
+        repsByChainId.set(id, installedInGroup);
+        continue;
+      }
+
+      repsByChainId.set(id, list[0]);
+    }
+
+    // 3) Apply query filtering:
+    // - noChain mods: match normally
+    // - chain groups: match if ANY member matches, but show representative
+    const includedChainIds = new Set();
+    for (const [id, list] of groups.entries()) {
+      if (!q) {
+        includedChainIds.add(id);
+        continue;
+      }
+      if (list.some(matchesQuery)) includedChainIds.add(id);
+    }
+
+    // Preserve ordering based on original `mods` ordering.
+    const out = [];
+    const added = new Set();
+    for (const m of mods) {
+      const id = chainIdForMod(m);
+      const keyLower = `${String(m.dev).toLowerCase()}::${String(m.name).toLowerCase()}`;
+      if (!id) {
+        if (!matchesQuery(m)) continue;
+        if (!added.has(keyLower)) {
+          out.push(m);
+          added.add(keyLower);
+        }
+        continue;
+      }
+      if (!includedChainIds.has(id)) continue;
+      const rep = repsByChainId.get(id);
+      if (!rep) continue;
+      const repKeyLower = `${String(rep.dev).toLowerCase()}::${String(
+        rep.name
+      ).toLowerCase()}`;
+      if (!added.has(repKeyLower)) {
+        out.push(rep);
+        added.add(repKeyLower);
+      }
+    }
+
+    return out;
+  }, [
+    manifest.mods,
+    manifest.chain_config,
+    query,
+    selectedMod,
+    modCfgFilesByKey,
+    installedModVersions,
+  ]);
+
+  // Best-effort prefetch of config-file matches per mod so chain-dedup is accurate.
+  useEffect(() => {
+    const mods = Array.isArray(manifest.mods) ? manifest.mods : [];
+    if (mods.length === 0) return;
+
+    let cancelled = false;
+    (async () => {
+      // Fetch in small batches to avoid spamming the backend.
+      const CONCURRENCY = 6;
+      const queue = mods
+        .map((m) => ({
+          mod: m,
+          keyLower: `${String(m.dev).toLowerCase()}::${String(m.name).toLowerCase()}`,
+        }))
+        .filter((x) => x.keyLower && modCfgFilesByKey[x.keyLower] == null);
+
+      if (queue.length === 0) return;
+
+      const nextMap = { ...modCfgFilesByKey };
+      let idx = 0;
+      async function worker() {
+        while (idx < queue.length && !cancelled) {
+          const cur = queue[idx++];
+          try {
+            const files = await invoke("list_config_files_for_mod", {
+              dev: cur.mod.dev,
+              name: cur.mod.name,
+            });
+            nextMap[cur.keyLower] = (Array.isArray(files) ? files : [])
+              .map((p) => String(p))
+              .filter((p) => p.toLowerCase().endsWith(".cfg"));
+          } catch {
+            nextMap[cur.keyLower] = [];
+          }
+        }
+      }
+
+      await Promise.all(Array.from({ length: CONCURRENCY }, () => worker()));
+      if (!cancelled) setModCfgFilesByKey(nextMap);
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+    // Intentionally not including modCfgFilesByKey in deps to avoid infinite re-fetch loops.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [manifest.mods]);
 
   const progressText = useMemo(() => {
     const p = task.overall_percent;
@@ -220,12 +413,40 @@ export default function LauncherPage({
     });
   }, []);
 
+  async function refreshInstalledModVersions(v = selectedVersion) {
+    const vv = Number(v);
+    if (!Number.isFinite(vv)) return;
+    if (!isInstalled(v)) {
+      setInstalledModVersionsByVersion((prev) => ({ ...prev, [vv]: {} }));
+      return;
+    }
+    try {
+      const list = await invoke("list_installed_mod_versions", { version: v });
+      const map = {};
+      for (const it of Array.isArray(list) ? list : []) {
+        const k = `${String(it.dev).toLowerCase()}::${String(
+          it.name
+        ).toLowerCase()}`;
+        map[k] = String(it.version ?? "");
+      }
+      setInstalledModVersionsByVersion((prev) => ({ ...prev, [vv]: map }));
+    } catch {
+      // best-effort (missing folder, etc)
+      setInstalledModVersionsByVersion((prev) => ({ ...prev, [vv]: {} }));
+    }
+  }
+
   // auto-run update check once on startup for installed selected version
   useEffect(() => {
     if (!isInstalled(selectedVersion)) return;
     if (autoCheckedRef.current.has(selectedVersion)) return;
     autoCheckedRef.current.add(selectedVersion);
     checkModUpdates(selectedVersion);
+  }, [selectedVersion, installedVersions]);
+
+  // refresh installed plugin versions when selected version changes
+  useEffect(() => {
+    refreshInstalledModVersions(selectedVersion);
   }, [selectedVersion, installedVersions]);
 
   const disabledSet = useMemo(() => {
@@ -273,6 +494,9 @@ export default function LauncherPage({
         invoke("list_installed_versions")
           .then((v) => setInstalledVersions(Array.isArray(v) ? v : []))
           .catch(() => {});
+        // refresh installed plugin versions for this game version
+        const v = Number(event.payload?.version);
+        if (Number.isFinite(v)) refreshInstalledModVersions(v);
       });
       unlistenError = await listen("download://error", (event) => {
         setTask((t) => ({
@@ -488,6 +712,7 @@ export default function LauncherPage({
         total: 0,
         error: null,
       }));
+      refreshInstalledModVersions(v);
     } catch (e) {
       setTask((t) => ({
         ...t,
@@ -564,30 +789,148 @@ export default function LauncherPage({
     }
   }
 
-  async function toggleModEnabled(nextEnabled) {
-    if (!selectedMod) return;
+  function markModBusy(key, busy) {
+    setModToggleBusyKeys((prev) => {
+      const next = new Set(prev);
+      if (busy) next.add(key);
+      else next.delete(key);
+      return next;
+    });
+  }
+
+  async function listCfgFilesForMod(mod) {
+    if (!mod) return [];
+    try {
+      const files = await invoke("list_config_files_for_mod", {
+        dev: mod.dev,
+        name: mod.name,
+      });
+      return (Array.isArray(files) ? files : [])
+        .map((p) => String(p))
+        .filter((p) => p.toLowerCase().endsWith(".cfg"));
+    } catch {
+      return [];
+    }
+  }
+
+  function chainedPathsForConfigPath(p) {
+    const chain = manifest.chain_config?.find((paths) => paths.includes(p));
+    return Array.isArray(chain) ? chain : null;
+  }
+
+  async function resolveModsForConfigPath(p) {
+    const pathLower = String(p ?? "").toLowerCase();
+    const mods = Array.isArray(manifest.mods) ? manifest.mods : [];
+
+    // Best-effort: narrow down candidates by substring match, then confirm by asking backend.
+    const candidates = mods
+      .filter((m) => {
+        const d = String(m?.dev ?? "").toLowerCase();
+        const n = String(m?.name ?? "").toLowerCase();
+        if (!d && !n) return false;
+        return (d && pathLower.includes(d)) || (n && pathLower.includes(n));
+      })
+      .slice(0, 12);
+
+    const confirmed = await Promise.all(
+      candidates.map(async (m) => {
+        const files = await listCfgFilesForMod(m);
+        return files.includes(p) ? m : null;
+      })
+    );
+    return confirmed.filter(Boolean);
+  }
+
+  async function toggleModEnabledForMod(mod, nextEnabled, opts) {
+    if (!mod) return;
+    const propagateChain = opts?.propagateChain ?? true;
     if (!isInstalled(selectedVersion)) {
       openDownloadPrompt(selectedVersion);
       return;
     }
-    setModToggleBusy(true);
+
+    const baseKey = `${String(mod.dev).toLowerCase()}::${String(
+      mod.name
+    ).toLowerCase()}`;
+
+    // If the mod has a chained config file, toggle linked mods too.
+    let modsToToggle = [mod];
+    if (propagateChain) {
+      const cfgFiles = await listCfgFilesForMod(mod);
+      const linkedPaths = new Set();
+      for (const cfgPath of cfgFiles) {
+        const chain = chainedPathsForConfigPath(cfgPath);
+        if (!chain) continue;
+        for (const other of chain) {
+          if (other && other !== cfgPath) linkedPaths.add(other);
+        }
+      }
+
+      if (linkedPaths.size > 0) {
+        const linkedMods = await Promise.all(
+          Array.from(linkedPaths).map((p) => resolveModsForConfigPath(p))
+        );
+        for (const list of linkedMods) {
+          for (const m of Array.isArray(list) ? list : []) {
+            if (!m) continue;
+            modsToToggle.push(m);
+          }
+        }
+      }
+    }
+
+    // Dedup and skip mods already in desired state (except the primary).
+    const seen = new Set();
+    modsToToggle = modsToToggle.filter((m) => {
+      const k = `${String(m.dev).toLowerCase()}::${String(m.name).toLowerCase()}`;
+      if (seen.has(k)) return false;
+      seen.add(k);
+      if (k !== baseKey) {
+        const currentlyEnabled = !disabledSet.has(k);
+        if (!!nextEnabled === currentlyEnabled) return false;
+      }
+      return true;
+    });
+
+    const toggledKeys = modsToToggle.map(
+      (m) => `${String(m.dev).toLowerCase()}::${String(m.name).toLowerCase()}`
+    );
+    for (const k of toggledKeys) markModBusy(k, true);
+
+    const selectedKey =
+      selectedMod &&
+      `${String(selectedMod.dev).toLowerCase()}::${String(
+        selectedMod.name
+      ).toLowerCase()}`;
+    const affectsSelected = selectedKey && toggledKeys.includes(selectedKey);
+    if (affectsSelected) setModToggleBusy(true);
     try {
-      await invoke("set_mod_enabled", {
-        version: selectedVersion,
-        dev: selectedMod.dev,
-        name: selectedMod.name,
-        enabled: !!nextEnabled,
-      });
+      await Promise.all(
+        modsToToggle.map((m) =>
+          invoke("set_mod_enabled", {
+            version: selectedVersion,
+            dev: m.dev,
+            name: m.name,
+            enabled: !!nextEnabled,
+          })
+        )
+      );
       // refresh disabled list (source of truth)
       const dm = await invoke("get_disabled_mods");
       setDisabledMods(Array.isArray(dm) ? dm : []);
-      setModEnabled(!!nextEnabled);
+      if (affectsSelected) setModEnabled(!!nextEnabled);
     } catch (e) {
       console.error(e);
       setCfgError(e?.message ?? String(e));
     } finally {
-      setModToggleBusy(false);
+      for (const k of toggledKeys) markModBusy(k, false);
+      if (affectsSelected) setModToggleBusy(false);
     }
+  }
+
+  async function toggleModEnabled(nextEnabled) {
+    if (!selectedMod) return;
+    return toggleModEnabledForMod(selectedMod, nextEnabled);
   }
 
   const versionOptions = useMemo(() => {
@@ -806,16 +1149,31 @@ export default function LauncherPage({
                   const initials = `${m.dev?.[0] ?? "M"}${
                     m.name?.[0] ?? "M"
                   }`.toUpperCase();
+                  const keyLower = `${String(m.dev).toLowerCase()}::${String(
+                    m.name
+                  ).toLowerCase()}`;
+                  const enabled = !disabledSet.has(keyLower);
+                  const installedVer = installedModVersions[keyLower];
+                  const busy = modToggleBusyKeys.has(keyLower);
                   return (
-                    <button
+                    <div
                       key={modKey(m)}
                       className={cn(
                         "group flex w-full items-start gap-3 rounded-2xl border px-3 py-3 text-left transition",
                         selected
                           ? "border-white/20 bg-white/10"
-                          : "border-white/10 bg-black/10 hover:bg-white/10"
+                          : "border-white/10 bg-black/10 hover:bg-white/10",
+                          installedVer || "opacity-40"
                       )}
                       onClick={() => setSelectedMod(m)}
+                      role="button"
+                      tabIndex={0}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" || e.key === " ") {
+                          e.preventDefault();
+                          setSelectedMod(m);
+                        }
+                      }}
                     >
                       <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-white/10 text-sm font-bold text-white/80">
                         {initials}
@@ -833,8 +1191,36 @@ export default function LauncherPage({
                           Click to edit config
                         </div>
                       </div>
-                      <Settings2 className="mt-1 h-4 w-4 shrink-0 text-white/30 opacity-0 transition group-hover:opacity-100" />
-                    </button>
+                      <div className="self-stretch flex shrink-0 items-center">
+                        {/* <div
+                          className={cn(
+                            "rounded-full border border-white/10 bg-white/5 px-2 py-0.5 text-[11px]",
+                            installedVer ? "text-white/60" : "text-white/35"
+                          )}
+                          title={
+                            installedVer
+                              ? `Installed: v${installedVer}`
+                              : "Not installed"
+                          }
+                        >
+                          {installedVer ? `v${installedVer}` : "not installed"}
+                        </div> */}
+                        <div
+                          onClick={(e) => e.stopPropagation()}
+                          onKeyDown={(e) => e.stopPropagation()}
+                          className="inline-flex"
+                        >
+                          <Switch
+                            checked={enabled}
+                            disabled={busy}
+                            onCheckedChange={(v) =>
+                              toggleModEnabledForMod(m, !!v)
+                            }
+                          />
+                        </div>
+                      </div>
+                      {/* <Settings2 className="mt-1 h-4 w-4 shrink-0 text-white/30 opacity-0 transition group-hover:opacity-100" /> */}
+                    </div>
                   );
                 })}
                 {filteredMods.length === 0 && (
@@ -860,6 +1246,15 @@ export default function LauncherPage({
                     <div className="truncate text-sm text-white/40">
                       {selectedMod.dev}
                     </div>
+                    <div className="mt-1 text-xs text-white/45">
+                      {(() => {
+                        const k = `${String(selectedMod.dev).toLowerCase()}::${String(
+                          selectedMod.name
+                        ).toLowerCase()}`;
+                        const v = installedModVersions[k];
+                        return v ? `Installed: v${v}` : "Not installed";
+                      })()}
+                    </div>
                   </div>
                   <Button
                     variant="secondary"
@@ -872,7 +1267,7 @@ export default function LauncherPage({
                   </Button>
                 </div>
 
-                <div className="flex items-center justify-between rounded-2xl border border-white/10 bg-black/10 px-3 py-2">
+                {/* <div className="flex items-center justify-between rounded-2xl border border-white/10 bg-black/10 px-3 py-2">
                   <div className="text-sm font-semibold text-white/80">
                     Enabled
                   </div>
@@ -884,13 +1279,13 @@ export default function LauncherPage({
                         ? "On"
                         : "Off"}
                     </div>
-                    <Checkbox
+                    <Switch
                       checked={modEnabled}
                       disabled={modToggleBusy}
                       onCheckedChange={(v) => toggleModEnabled(!!v)}
                     />
                   </div>
-                </div>
+                </div> */}
 
                 <div className="flex items-center gap-2">
                   <div className="text-xs font-semibold text-white/50">

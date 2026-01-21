@@ -13,6 +13,7 @@ use std::collections::BTreeMap;
 use std::sync::Mutex;
 use tauri::{Manager, State};
 
+use crate::bepinex_cfg::read_manifest;
 use crate::progress::{TaskErrorPayload, TaskProgressPayload};
 use crate::{
     mod_config::ModsConfig,
@@ -106,6 +107,13 @@ fn mod_folder_name(dev: &str, name: &str) -> String {
 struct DisabledMod {
     dev: String,
     name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct InstalledModVersion {
+    dev: String,
+    name: String,
+    version: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -664,6 +672,68 @@ fn set_mod_enabled(
 }
 
 #[tauri::command]
+fn list_installed_mod_versions(
+    app: tauri::AppHandle,
+    version: u32,
+) -> Result<Vec<InstalledModVersion>, String> {
+    let plugins = plugins_dir(&app, version)?;
+    if !plugins.exists() {
+        return Ok(vec![]);
+    }
+
+    let mut out: Vec<InstalledModVersion> = vec![];
+    let Ok(rd) = std::fs::read_dir(&plugins) else {
+        return Ok(out);
+    };
+
+    for e in rd.flatten() {
+        let path = e.path();
+        if !path.is_dir() {
+            continue;
+        }
+
+        // Plugin folder naming is deterministic: "{dev}-{name}"
+        let folder = e.file_name().to_string_lossy().to_string();
+        let Some((dev, name)) = folder.split_once('-') else {
+            continue;
+        };
+
+        // When disabled, we suffix every file with `.old`, including manifest.json.
+        let manifest_path = path.join("manifest.json");
+        let manifest_old_path = path.join("manifest.json.old");
+
+        let manifest = if manifest_path.exists() {
+            read_manifest(&manifest_path)
+        } else if manifest_old_path.exists() {
+            read_manifest(&manifest_old_path)
+        } else {
+            continue;
+        };
+
+        match manifest {
+            Ok(m) => {
+                out.push(InstalledModVersion {
+                    dev: dev.to_string(),
+                    name: name.to_string(),
+                    version: m.version_number,
+                });
+            }
+            Err(err) => {
+                log::warn!(
+                    "Failed to read plugin manifest for {} (v{}): {}",
+                    folder,
+                    version,
+                    err
+                );
+            }
+        }
+    }
+
+    out.sort_by(|a, b| a.dev.cmp(&b.dev).then(a.name.cmp(&b.name)));
+    Ok(out)
+}
+
+#[tauri::command]
 async fn get_manifest() -> Result<ManifestDto, String> {
     let client = reqwest::Client::new();
     let (version, cfg, chain_config, manifests) =
@@ -1077,6 +1147,7 @@ pub fn run() {
             get_disabled_mods,
             apply_disabled_mods,
             set_mod_enabled,
+            list_installed_mod_versions,
             get_manifest,
             list_installed_versions,
             list_config_files,

@@ -1,6 +1,12 @@
 ## Version (YYYY-MM-DD)
 - Content
 
+## 1.1.3
+- The position of the plugin enable/disable button has been changed.
+- Installed plugin versions are now displayed in the config editor.
+- Fixed an issue where linked plugins were not enabled/disabled together.
+- When a linked plugin exists, only one of them is now displayed instead of both.
+
 ## 1.1.2 (2025-01-21)
 - Fixed an issue where you could not log in when using Steam app authentication.
 
