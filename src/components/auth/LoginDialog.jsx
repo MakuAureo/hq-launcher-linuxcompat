@@ -88,6 +88,11 @@ export function LoginDialog({ open, onLoggedIn }) {
                 "When you receive the Steam Guard (email/app) code, enter it and click Submit code."
               );
             }
+            if (line.includes("Use the Steam Mobile App to confirm your sign in")) {
+              setError("Use the Steam Mobile App to confirm your sign in")
+              setNeeds2fa(false);
+              setSessionId(null);
+            }
             if (line.includes("1966721")) {
               setNeeds2fa(false)
             }

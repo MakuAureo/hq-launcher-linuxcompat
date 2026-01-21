@@ -265,14 +265,14 @@ impl DepotDownloader {
             "-depot".to_string(),
             Self::DEPOT_ID.to_string(),
             "-manifest-only".to_string(),
-            "-no-mobile".to_string(),
+            // "-no-mobile".to_string(),
             "-dir".to_string(),
             login_tmp_dir.to_string_lossy().to_string(),
             "-username".to_string(),
             credentials.username.clone(),
             "-password".to_string(),
             credentials.password.clone(),
-            "-remember-password".to_string(),
+            // "-remember-password".to_string(),
         ];
         let mut args = args;
         if self.ipc_mode {
