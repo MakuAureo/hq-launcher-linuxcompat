@@ -682,12 +682,11 @@ fn launch_game(
 
     #[cfg(target_os = "linux")]
     let (proton_binary, compat_data_path) = {
-        let proton_env_path = app_path.join("proton_env");
-        let proton_bin_path = proton_env_path.join("proton");
+        let proton_env_path = installer::proton_env_dir(&app).map_err(|e| format!("proton_env path not found: {e}"))?;
+        let proton_bin_path = installer::get_current_proton_dir_impl(&app)
+            .map_err(|e| format!("proton path not found: {e}"))?
+            .ok_or("found proton path but is None")?;
         let compat_pre_path = proton_env_path.join("wine_prefix");
-        if !proton_bin_path.exists() {
-            std::fs::create_dir_all(&proton_bin_path).map_err(|e| format!("could not make proton path: {e}"))?;
-        }
         if !compat_pre_path.exists() {
             std::fs::create_dir(&compat_pre_path).map_err(|e| format!("could not make prefix: {e}"))?;
         }
