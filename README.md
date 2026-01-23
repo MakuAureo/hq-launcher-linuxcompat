@@ -47,6 +47,9 @@ _Main Interface_
 
 ![screenshot](https://raw.githubusercontent.com/p-asta/hq-launcher/main/assets/ss/1.png)
 
+## contributer
+![contributors](https://contrib.rocks/image?repo=OWNER/REPO)
+
 ## Development
 
 ### Prerequisites

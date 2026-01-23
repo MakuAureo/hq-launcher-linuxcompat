@@ -1,8 +1,11 @@
 ## Version (YYYY-MM-DD)
 - Content
 
+## 1.2.2 (2026-01-23)
+- Fix to automatically install and run Proton on Linux (thanks Maku!)
+
 ## 1.2.1 (2026-01-22)
-- linux..?
+- Fixed a bug where some items were not applied when the remote manifest was modified.
 
 ## 1.2.0 (2026-01-22)
 - Closing and reopening the download window now clears download errors/status.
