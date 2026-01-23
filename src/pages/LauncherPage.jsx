@@ -1184,14 +1184,14 @@ export default function LauncherPage({
                   const installedVer = installedModVersions[keyLower];
                   const busy = modToggleBusyKeys.has(keyLower);
                   return (
-                    installedVer && <div
+                    ((!isInstalled(selectedVersion)) || installedVer) && <div
                       key={modKey(m)}
                       className={cn(
                         "group flex w-full items-start gap-3 rounded-2xl border px-3 py-3 text-left transition",
                         selected
                           ? "border-white/20 bg-white/10"
                           : "border-white/10 bg-black/10 hover:bg-white/10",
-                          // installedVer || "opacity-40"
+                          installedVer || "opacity-40"
                       )}
                       onClick={() => setSelectedMod(m)}
                       role="button"

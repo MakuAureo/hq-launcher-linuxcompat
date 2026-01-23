@@ -7,6 +7,7 @@ mod mods;
 mod progress;
 mod thunderstore;
 mod zip_utils;
+mod variable;
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -679,6 +680,14 @@ fn launch_game(
 
     #[cfg(target_os = "windows")]
     let mut command = std::process::Command::new(&exe_path);
+    
+    #[cfg(target_os = "macos")]
+    let mut command = {
+        let mut cmd = std::process::Command::new("open");
+        cmd.arg("-a");
+        cmd.arg(&exe_path);
+        cmd
+    };
 
     #[cfg(target_os = "linux")]
     let (proton_binary, compat_data_path) = {
