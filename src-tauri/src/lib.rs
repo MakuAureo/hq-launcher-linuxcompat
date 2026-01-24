@@ -947,7 +947,8 @@ fn launch_game(
         cmd.env("STEAM_COMPAT_DATA_PATH", &compat_data_path);
         cmd.env("STEAM_COMPAT_CLIENT_INSTALL_PATH", &steam_path);
         cmd.env("WINEDLLOVERRIDES", "winhttp=n,b");
-        println!("{:?}", cmd);
+        cmd.env_remove("PYTHONPATH"); 
+        cmd.env_remove("PYTHONHOME");
         cmd
     };
 
