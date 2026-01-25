@@ -3,6 +3,7 @@
 
 ## 1.3.5 (2026-01-25)
 - Fix python using user path instead of system path
+- Change logo
 
 ## 1.3.4 (2026-01-24)
 - Add link/unlink config folder
