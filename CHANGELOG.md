@@ -1,6 +1,11 @@
 ## Version (YYYY-MM-DD)
 - Content
 
+## 1.3.7 (2026-01-26)
+- Add v40 practice mods
+  - DanceTools
+  - FreeCammer
+
 ## 1.3.6 (2026-01-26)
 - Change Logo
 

@@ -76,5 +76,21 @@ pub fn get_practice_mod_list() -> Vec<ModEntry> {
             high_cap: None,
             version_config: BTreeMap::new(),
         },
+        ModEntry {
+            dev: "Shinobi".to_string(),
+            name: "DanceTools".to_string(),
+            enabled: true,
+            low_cap: None,
+            high_cap: Some(44),
+            version_config: BTreeMap::new(),
+        },
+        ModEntry {
+            dev: "the_croods".to_string(),
+            name: "FreeCammer".to_string(),
+            enabled: true,
+            low_cap: None,
+            high_cap: Some(49),
+            version_config: BTreeMap::new(),
+        }
     ]
 }

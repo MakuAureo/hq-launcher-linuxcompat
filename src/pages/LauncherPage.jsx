@@ -2076,8 +2076,7 @@ export default function LauncherPage({
                     : "Updating..."}
                 </div>
                 <div className="mt-1 text-sm text-white/55">
-                  Remote manifest 기준으로 config/mods를 최신 설치 버전에
-                  반영합니다.
+                  Based on the remote manifest, config/mods is reflected in the latest installed version.
                 </div>
               </div>
             </div>

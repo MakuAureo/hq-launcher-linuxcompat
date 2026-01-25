@@ -24,6 +24,8 @@ A game launcher built with [React](https://react.dev/) and [Tauri](https://tauri
 - [LethalDevMode](https://thunderstore.io/c/lethal-company/p/megumin/LethalDevMode/)(v45+)
 - [Imperium](https://thunderstore.io/c/lethal-company/p/giosuel/Imperium/)(v50+)
 - [CruiserJumpPractice](https://thunderstore.io/c/lethal-company/p/aoirint/CruiserJumpPractice/)(v56+)
+- [DanceTools](https://thunderstore.io/c/lethal-company/p/Shinobi/DanceTools/)(v44-)
+- [FreeCammer](https://thunderstore.io/c/lethal-company/p/the_croods/FreeCammer/)(v49-)
 
 ## Installation
 
